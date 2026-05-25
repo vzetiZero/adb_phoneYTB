@@ -198,6 +198,37 @@ Mỗi loop:
 - `apply_screen_config(lock_portrait=True)` → khoá portrait tránh BoxPhone tự xoay khi YouTube fullscreen.
 - `wake_device()` nếu `dumpsys power` báo `wakefulness=asleep`.
 
+### 4.7. Chống xoay ngang — phòng thủ 3 lớp
+
+YouTube và Chrome khi gặp video 16:9 sẽ chủ động gọi `setRequestedOrientation(LANDSCAPE)` ở Activity level, **ghi đè** mọi setting hệ thống. Để chống, pipeline dùng 3 lớp phòng thủ:
+
+**Lớp 1 — Lock hệ thống** (mỗi device, gọi 1 lần sau preflight):
+- `apply_screen_config(lock_portrait=True)` trong [adb_time_sync/screen.py](adb_time_sync/screen.py):
+  - `settings put system accelerometer_rotation 0` (tắt auto-rotate cảm biến)
+  - `settings put system user_rotation 0` (đặt rotation hiện tại = portrait)
+  - `wm set-user-rotation lock 0` + `wm set-fix-to-user-rotation enabled`
+
+**Lớp 2 — Ignore app orientation requests** (Android 12+, gọi 1 lần sau lớp 1):
+- `try_disable_orientation_requests(adb, serial)` → `cmd window set-ignore-orientation-request true`.
+- Đây là **fix sạch nhất**: WindowManager bỏ qua mọi `setRequestedOrientation()` từ app. YouTube/Chrome có gọi cũng không xoay được.
+- Android < 12 (BoxPhone Hàn cũ Android 9-11): command return non-zero, log `"ROM không hỗ trợ ignore-orientation-request"`. Rơi sang lớp 3.
+
+**Lớp 3 — Watchdog `ensure_portrait()`** (chạy trong vòng lặp, tự hồi phục):
+- File: `screen.ensure_portrait(adb, serial, log_cb)` đọc rotation hiện tại bằng `get_current_rotation()` — thử 3 cách theo thứ tự:
+  1. `dumpsys input` → `SurfaceOrientation: N` (cross Android 8-14)
+  2. `settings get system user_rotation` (fallback)
+  3. `dumpsys window displays` → `mCurRotation=ROTATION_N` (fallback 2)
+- Nếu rotation ≠ 0 → re-apply `apply_screen_config(lock_portrait=True)` + `try_disable_orientation_requests` + log `[ORI] Phát hiện rotation=N, ép lại portrait`.
+- Gọi định kỳ trong các loop dài:
+  - [youtube_flow._watch_video](adb_time_sync/youtube_flow.py) — đầu mỗi nap (8-20s)
+  - [youtube_flow._scroll_reels](adb_time_sync/youtube_flow.py) — đầu mỗi reel
+  - [chrome_flow._browse_landing](adb_time_sync/chrome_flow.py) — đầu mỗi nap (5-18s)
+- Cost: ~100ms `dumpsys input` mỗi lần check, không đáng kể so với watch time 60-300s.
+
+**Điều chỉnh bổ trợ**:
+- `_watch_video` đổi vùng tap pause/resume từ `(width/2, height/2)` sang `(width/2, 0.40*height)` — tránh trúng nút fullscreen ở góc dưới phải video player (player chiếm ~33% chiều cao trên cùng khi portrait).
+- `_browse_landing` đổi vùng tap mid-page từ `(0.5, 0.5)` sang `(0.5, 0.35)` — tránh trúng poster video ở giữa bài báo.
+
 ---
 
 ## 5. Vòng đời 1 phiên chạy (sequence)

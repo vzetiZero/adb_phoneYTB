@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
-from typing import Optional
+from typing import Callable, Optional
 
 from .adb import ADB, CmdResult
 
@@ -76,3 +77,102 @@ def apply_screen_config(
         _must_ok(serial, r1, "settings put system accelerometer_rotation 1")
 
     return read_screen_state(adb, serial)
+
+
+# ---------------------------------------------------------------------------
+# Rotation watchdog — detect & recover from app-driven landscape flips.
+# ---------------------------------------------------------------------------
+
+_ROT_INPUT_RE = re.compile(r"SurfaceOrientation:\s*(\d)")
+_ROT_WINDOW_RE = re.compile(r"mCurRotation=ROTATION_(\d+)")
+
+
+def get_current_rotation(adb: ADB, serial: str) -> Optional[int]:
+    """Return current display rotation as Surface.ROTATION_* (0/1/2/3).
+
+    0 = portrait (natural), 1 = landscape (rotated 90° CCW),
+    2 = upside-down portrait, 3 = landscape (rotated 90° CW).
+    Returns None when we couldn't parse — caller should leave state alone.
+
+    Tries 3 methods so it works from Android 8 (BoxPhone Hàn cũ) through 14.
+    """
+    # Method 1 — `dumpsys input` ships SurfaceOrientation on every Android
+    # release we've seen. Cheap and stable. (~100ms)
+    r = adb.shell(serial, "dumpsys input")
+    if r.ok and r.out:
+        m = _ROT_INPUT_RE.search(r.out)
+        if m:
+            return int(m.group(1))
+
+    # Method 2 — `settings get system user_rotation`. This is what we WROTE
+    # earlier; reading it back tells us if an app overrode it.
+    r = adb.shell(serial, "settings get system user_rotation")
+    if r.ok and r.out:
+        v = r.out.strip()
+        if v.isdigit():
+            return int(v)
+
+    # Method 3 — fall back to WindowManager state ("mCurRotation=ROTATION_90"...)
+    r = adb.shell(serial, "dumpsys window displays")
+    if r.ok and r.out:
+        m = _ROT_WINDOW_RE.search(r.out)
+        if m:
+            return int(m.group(1)) // 90
+
+    return None
+
+
+def try_disable_orientation_requests(adb: ADB, serial: str) -> bool:
+    """Ask the WindowManager to IGNORE every app's setRequestedOrientation()
+    call. This is the cleanest fix for the YouTube/Chrome auto-fullscreen
+    landscape problem, but it only works on Android 12+ (introduced in API 31).
+
+    On older ROMs the command returns non-zero or prints "Unknown command";
+    we treat both as "feature unavailable" and return False — the watchdog
+    still runs as fallback.
+    """
+    r = adb.shell(serial, "cmd window set-ignore-orientation-request true")
+    if not r.ok:
+        return False
+    blob = (r.out + " " + r.err).lower()
+    if "unknown" in blob or "error" in blob or "exception" in blob:
+        return False
+    return True
+
+
+def ensure_portrait(
+    adb: ADB,
+    serial: str,
+    log_cb: Optional[Callable[[str], None]] = None,
+) -> bool:
+    """Watchdog: if the device has rotated out of portrait, re-apply the lock.
+
+    Call this periodically inside long-running loops (`_watch_video`,
+    `_browse_landing`, between Shorts reels). It's cheap when already
+    portrait (one `dumpsys input` ~100ms) and corrective when not.
+
+    Returns True if the device is portrait when we return, False if we
+    couldn't detect/fix.
+    """
+    rot = get_current_rotation(adb, serial)
+    if rot is None:
+        return False  # unknown — don't fight what we can't measure
+    if rot == 0:
+        return True
+    if log_cb:
+        log_cb(f"[ORI] Phát hiện rotation={rot}, ép lại portrait")
+    try:
+        apply_screen_config(adb, serial, lock_portrait=True)
+    except Exception as e:
+        if log_cb:
+            log_cb(f"[ORI] apply_screen_config fail: {e}")
+        return False
+    # Try the modern flag again in case app re-enabled it
+    try_disable_orientation_requests(adb, serial)
+    # Re-verify; some BoxPhone ROMs need a beat to settle.
+    rot2 = get_current_rotation(adb, serial)
+    if rot2 == 0:
+        return True
+    if log_cb:
+        log_cb(f"[ORI] Sau khi ép vẫn rotation={rot2} — chấp nhận, tiếp tục")
+    return False

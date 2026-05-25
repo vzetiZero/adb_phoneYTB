@@ -20,7 +20,7 @@ from typing import Callable, Optional
 from .adb import ADB
 from .chrome_flow import CHROME_PKG, run_chrome_task
 from .human import home, interruptible_sleep, lognormal_sleep, wait_for_foreground
-from .screen import apply_screen_config
+from .screen import apply_screen_config, try_disable_orientation_requests
 from .wake import wake_device
 from .youtube_flow import YOUTUBE_PKG, run_youtube_task
 
@@ -270,6 +270,15 @@ def run_tasks_on_device(
     # Lock the device to portrait once so YouTube fullscreen video / Chrome
     # video pages can't flip the screen mid-flow (the root cause of the
     # "thiết bị tự xoay ngang" bug reported by the operator).
+    #
+    # Two-layer defense:
+    #   1) apply_screen_config(lock_portrait=True) — system-level lock
+    #      (accelerometer_rotation=0, user_rotation=0, wm lock).
+    #   2) try_disable_orientation_requests() — Android 12+ flag that makes
+    #      WindowManager IGNORE every app's setRequestedOrientation() call.
+    #      This is the real fix for YouTube/Chrome auto-rotating to landscape
+    #      when a 16:9 video plays. On Android < 12 this is a no-op; the
+    #      per-loop ensure_portrait() watchdog handles those ROMs instead.
     try:
         apply_screen_config(adb, serial, lock_portrait=True)
         if log_cb:
@@ -277,6 +286,12 @@ def run_tasks_on_device(
     except Exception as e:
         if log_cb:
             log_cb(f"[SETUP] Không khoá được portrait (bỏ qua): {e}")
+    if try_disable_orientation_requests(adb, serial):
+        if log_cb:
+            log_cb("[SETUP] WindowManager đã bỏ qua mọi yêu cầu xoay từ app (Android 12+)")
+    else:
+        if log_cb:
+            log_cb("[SETUP] ROM không hỗ trợ ignore-orientation-request — sẽ dùng watchdog ensure_portrait")
 
     for task in tasks:
         if stop_event and stop_event.is_set():

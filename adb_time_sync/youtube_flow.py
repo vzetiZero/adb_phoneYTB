@@ -36,6 +36,7 @@ from .human import (
     tap,
     watch_duration_seconds,
 )
+from .screen import ensure_portrait
 from .text_input import type_text
 from .ui_state import (
     dump_ui,
@@ -439,6 +440,9 @@ def _scroll_reels(
                 f" đã lướt {i} reel. Thoát Shorts, chuyển sang search.",
             )
             return
+        # Watchdog: a stray ad-interstitial or mis-tap can rotate the screen
+        # mid-Shorts; recover before swiping with stale coordinates.
+        ensure_portrait(adb, serial, log_cb=log_cb)
         # Verify we're still in Shorts before pretending to watch. If we drifted
         # out (popup, accidental tap-to-Home, etc.), try to re-enter.
         if not _ensure_in_shorts(adb, serial, size, log_cb):
@@ -563,19 +567,39 @@ def _watch_video(
     stop_event: Optional[threading.Event],
     log_cb=None,
 ) -> None:
+    """Pretend-watch the currently-open YouTube video.
+
+    This is the loop most exposed to landscape flips: when a 16:9 video
+    starts playing, YouTube calls setRequestedOrientation(SENSOR_LANDSCAPE)
+    and the device rotates. On Android 12+ the WindowManager flag set in
+    task_runner blocks that call entirely; on older ROMs we rely on the
+    ensure_portrait() watchdog here, which re-applies the lock as soon as
+    we detect rot != 0 between naps.
+
+    Pause/resume tap target is intentionally above the screen midpoint
+    (40% height) — the player's fullscreen icon sits at the bottom-right
+    of the video surface, which on a portrait phone with a 16:9 player
+    lives around (95% width, 33% height). Tapping at (50%, 40%) stays
+    inside the video but well clear of the fullscreen control.
+    """
     total = random.uniform(min_sec, max_sec)
     _log(log_cb, f"[YT] Xem video {total:.0f}s")
     end = time.time() + total
+    pause_x = size.width // 2
+    pause_y = int(size.height * 0.40)
     while time.time() < end:
+        # Watchdog: recover from app-driven landscape between naps.
+        ensure_portrait(adb, serial, log_cb=log_cb)
+
         nap = min(end - time.time(), random.uniform(8.0, 20.0))
         if interruptible_sleep(stop_event, max(0.5, nap)):
             return
-        # Occasional pause/resume by tapping the middle.
+        # Occasional pause/resume — tap in the safe upper-half of the player.
         if random.random() < 0.25:
-            tap(adb, serial, size.width // 2, size.height // 2)
+            tap(adb, serial, pause_x, pause_y)
             if interruptible_sleep(stop_event, lognormal_sleep(0.5, 0.4, 0.4, 1.8)):
                 return
-            tap(adb, serial, size.width // 2, size.height // 2)
+            tap(adb, serial, pause_x, pause_y)
         # Occasional small scroll on the comments below.
         if random.random() < 0.15:
             swipe(

@@ -30,6 +30,7 @@ from .human import (
     swipe_up,
     tap,
 )
+from .screen import ensure_portrait
 from .ui_state import dump_ui, find_by_text, iter_nodes
 
 
@@ -197,10 +198,22 @@ def _browse_landing(
     stop_event: Optional[threading.Event],
     log_cb=None,
 ) -> None:
+    """Pretend-read the article page for `seconds`.
+
+    Watchdog ensure_portrait() runs each iter because Naver / news pages
+    embed HTML5 video players that auto-fullscreen on tap and request
+    landscape. The mid-page tap target is pinned to 35% height instead
+    of dead-centre so a stray tap is less likely to land on a video
+    poster (typically the upper third of an article).
+    """
     end = time.time() + seconds
     _log(log_cb, f"[CHR] Lướt trang ~{seconds:.0f}s")
     last_was_up = True
     while time.time() < end:
+        # Watchdog: if the landing page rotated us, snap back to portrait
+        # before swipe coordinates become meaningless.
+        ensure_portrait(adb, serial, log_cb=log_cb)
+
         # Reading pause
         nap = min(end - time.time(), random.uniform(5.0, 18.0))
         if interruptible_sleep(stop_event, max(0.5, nap)):
@@ -214,8 +227,10 @@ def _browse_landing(
         if interruptible_sleep(stop_event, lognormal_sleep(0.6, 0.4, 0.5, 2.0)):
             return
         # Occasionally tap mid-page (like reaching for a link, then back).
+        # 35% height keeps the tap below most article hero-images / video
+        # posters but above ads injected at the fold.
         if random.random() < 0.10:
-            tap(adb, serial, int(size.width * 0.5), int(size.height * 0.5))
+            tap(adb, serial, int(size.width * 0.5), int(size.height * 0.35))
             if interruptible_sleep(stop_event, lognormal_sleep(0.6, 0.4, 0.6, 2.0)):
                 return
             back(adb, serial)
