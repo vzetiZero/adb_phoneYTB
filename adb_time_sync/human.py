@@ -199,3 +199,54 @@ def wait_for_foreground(
 def is_foreground(adb: ADB, serial: str, package: str) -> bool:
     pkg = current_focus(adb, serial)
     return bool(pkg) and pkg == package
+
+
+def ensure_app_foreground(
+    adb: ADB,
+    serial: str,
+    target_pkg: str,
+    log_cb=None,
+    max_back: int = 3,
+) -> bool:
+    """Recover when an ad / popup hijacks the foreground.
+
+    Real cases observed on BoxPhone Hàn:
+      - Tapping a Shorts ad opens Google Play (com.android.vending) full-screen.
+      - Tapping a Chrome SERP ad opens Samsung Internet / external app.
+      - A YouTube "App-install" interstitial backed by Play Store.
+
+    Strategy (least to most aggressive):
+      1) target_pkg already foreground → done.
+      2) Press BACK up to `max_back` times — handles most ad-popup redirects
+         because the hijacker was launched with FLAG_ACTIVITY_NEW_TASK and
+         BACK returns to the previous task (our target app).
+      3) Still hijacked → `am force-stop <hijacker>` then bring target back
+         via `monkey LAUNCHER`. We deliberately DO NOT force-stop the target,
+         so its in-app state (current reel / current article tab) survives.
+
+    Returns True iff target_pkg is foreground when we return.
+    """
+    if is_foreground(adb, serial, target_pkg):
+        return True
+
+    cur = current_focus(adb, serial)
+    if log_cb:
+        log_cb(f"[FG] Foreground={cur!r} ≠ {target_pkg!r}; back {max_back} lần để thoát")
+
+    for i in range(max_back):
+        adb.shell(serial, "input keyevent KEYCODE_BACK")
+        time.sleep(0.4)
+        if is_foreground(adb, serial, target_pkg):
+            if log_cb:
+                log_cb(f"[FG] Đã về {target_pkg} sau {i+1} lần back")
+            return True
+
+    # Hard reset: kill the hijacker (NOT the target), relaunch target.
+    cur = current_focus(adb, serial)
+    if cur and cur != target_pkg:
+        if log_cb:
+            log_cb(f"[FG] Vẫn bị giữ bởi {cur!r}; force-stop và relaunch {target_pkg}")
+        adb.shell(serial, f"am force-stop {cur}")
+    adb.shell(serial, f"monkey -p {target_pkg} -c android.intent.category.LAUNCHER 1")
+    time.sleep(0.8)
+    return is_foreground(adb, serial, target_pkg)

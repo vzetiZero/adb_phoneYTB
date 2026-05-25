@@ -21,6 +21,7 @@ from .adb import ADB
 from .human import (
     Size,
     back,
+    ensure_app_foreground,
     get_size,
     interruptible_sleep,
     is_foreground,
@@ -213,6 +214,9 @@ def _browse_landing(
         # Watchdog: if the landing page rotated us, snap back to portrait
         # before swipe coordinates become meaningless.
         ensure_portrait(adb, serial, log_cb=log_cb)
+        # Recover from ad-redirect: Naver / SERP ads occasionally launch
+        # Google Play or an external browser via intent:// scheme.
+        ensure_app_foreground(adb, serial, CHROME_PKG, log_cb=log_cb)
 
         # Reading pause
         nap = min(end - time.time(), random.uniform(5.0, 18.0))

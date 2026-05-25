@@ -30,6 +30,7 @@ from .adb import ADB
 from .human import (
     Size,
     back,
+    ensure_app_foreground,
     get_size,
     home,
     human_sleep,
@@ -99,6 +100,29 @@ LIKE_TEMPLATES_DIR = "like_templates"
 LIKE_TEMPLATE_THRESHOLD = 0.75
 LIKE_TEMPLATE_SCALES = (0.5, 0.65, 0.8, 1.0, 1.25, 1.5, 1.75, 2.0)
 
+# Bottom-sheet / dialog overlays that block scrolling on top of a Shorts reel.
+# When the user accidentally taps a reel's "more" / "description" / "share"
+# button, YT slides up one of these containers — a swipe-up then scrolls the
+# panel content instead of advancing to the next reel.
+YT_OVERLAY_RES_IDS = (
+    "com.google.android.youtube:id/bottom_sheet_container",
+    "com.google.android.youtube:id/design_bottom_sheet",
+    "com.google.android.youtube:id/dialog_bottom_sheet",
+    "com.google.android.youtube:id/touch_outside",
+    "com.google.android.youtube:id/dialog_container",
+)
+# Multi-locale labels that ONLY appear in such overlays (not in Shorts player).
+# 설명 = Description (Korean target), used as a positive signal.
+YT_OVERLAY_TITLES = (
+    "설명", "Description", "Mô tả", "说明", "説明",
+    "공유", "Share", "Chia sẻ", "分享", "共有",
+)
+HOME_TAB_RES_IDS = (
+    "com.google.android.youtube:id/home_feed_swipe_refresh_layout",
+    "com.google.android.youtube:id/big_yt_logo",
+    "com.google.android.youtube:id/youtube_logo",
+)
+
 
 def _cancelled(stop_event: Optional[threading.Event]) -> bool:
     return bool(stop_event and stop_event.is_set())
@@ -140,6 +164,79 @@ def _open_youtube(adb: ADB, serial: str, log_cb=None) -> bool:
     adb.shell(serial, f"monkey -p {YOUTUBE_PKG} -c android.intent.category.LAUNCHER 1")
     time.sleep(lognormal_sleep(0.8, 0.4, 1.5, 5.0))
     return is_foreground(adb, serial, YOUTUBE_PKG)
+
+
+def _dismiss_overlay(adb: ADB, serial: str, size: Size, log_cb=None) -> bool:
+    """Close any bottom-sheet / dialog overlay covering a Shorts reel.
+
+    Detection: YT bottom-sheet container res-id, OR a known overlay title
+    ("설명" / "Description" / "공유" / "Share" / multi-locale equivalents).
+
+    Dismissal: a single BACK keypress always closes YT bottom sheets — no
+    need to hunt for the X icon (its res-id is obfuscated per YT release).
+
+    Returns True if an overlay was detected and dismissed.
+    """
+    xml = dump_ui(adb, serial)
+    if not xml:
+        return False
+
+    has_overlay = bool(find_by_resource_id(xml, *YT_OVERLAY_RES_IDS))
+    if not has_overlay:
+        # Title-based fallback: a Shorts player never shows these strings,
+        # so seeing one is strong evidence an overlay is up.
+        for title in YT_OVERLAY_TITLES:
+            if find_by_text(xml, title, contains=False):
+                has_overlay = True
+                break
+    if not has_overlay:
+        return False
+
+    _log(log_cb, "[YT] Phát hiện overlay (mô tả/share/dialog) — đóng bằng back")
+    back(adb, serial)
+    time.sleep(lognormal_sleep(0.4, 0.3, 0.4, 1.2))
+    return True
+
+
+def _go_to_home_tab(adb: ADB, serial: str, size: Size, log_cb=None) -> bool:
+    """Navigate to the Home feed so the upcoming search starts from there.
+
+    Operator request: the search-keyword step should fire from Home, not
+    from inside Shorts (where deep-link search occasionally lands results
+    inside the Shorts player). Strategy:
+      1) Deep-link `vnd.youtube://feed/home` (most reliable, no UI tap).
+      2) Tap the leftmost bottom-nav slot at y≈96% height.
+      3) Last resort: monkey LAUNCHER (always lands on Home post-launch).
+    Verified by HOME_TAB_RES_IDS in the resulting dump.
+    """
+    deep_links = (
+        "vnd.youtube://feed/home",
+        "vnd.youtube://www.youtube.com/feed/home",
+    )
+    for url in deep_links:
+        r = adb.shell(serial, f'am start -a android.intent.action.VIEW -d "{url}"')
+        if r.ok:
+            time.sleep(lognormal_sleep(0.6, 0.4, 0.8, 2.5))
+            xml = dump_ui(adb, serial)
+            if xml and find_by_resource_id(xml, *HOME_TAB_RES_IDS):
+                _log(log_cb, f"[YT] Về Home tab qua {url}")
+                return True
+
+    # Tap bottom-nav home (leftmost slot, ~10% width × 96% height).
+    nav_x = int(size.width * 0.10)
+    nav_y = int(size.height * 0.96)
+    tap(adb, serial, nav_x, nav_y)
+    time.sleep(lognormal_sleep(0.5, 0.4, 0.6, 2.0))
+    xml = dump_ui(adb, serial)
+    if xml and find_by_resource_id(xml, *HOME_TAB_RES_IDS):
+        _log(log_cb, f"[YT] Về Home tab qua bottom-nav @({nav_x},{nav_y})")
+        return True
+
+    # Last resort: monkey LAUNCHER.
+    adb.shell(serial, f"monkey -p {YOUTUBE_PKG} -c android.intent.category.LAUNCHER 1")
+    time.sleep(lognormal_sleep(0.6, 0.4, 0.8, 2.5))
+    _log(log_cb, "[YT] Về Home tab qua monkey LAUNCHER (fallback)")
+    return True
 
 
 def _save_debug_dump(serial: str, xml: str, tag: str) -> None:
@@ -406,6 +503,11 @@ def _scroll_reels(
         # Watchdog: a stray ad-interstitial or mis-tap can rotate the screen
         # mid-Shorts; recover before swiping with stale coordinates.
         ensure_portrait(adb, serial, log_cb=log_cb)
+        # Recover if a Shorts ad bounced us into Play Store / external app.
+        ensure_app_foreground(adb, serial, YOUTUBE_PKG, log_cb=log_cb)
+        # Dismiss any bottom-sheet (description / share / more menu) that
+        # would otherwise eat our swipe-up gesture.
+        _dismiss_overlay(adb, serial, size, log_cb)
         # Verify we're still in Shorts before pretending to watch. If we drifted
         # out (popup, accidental tap-to-Home, etc.), try to re-enter.
         if not _ensure_in_shorts(adb, serial, size, log_cb):
@@ -549,6 +651,8 @@ def _watch_video(
     while time.time() < end:
         # Watchdog: recover from app-driven landscape between naps.
         ensure_portrait(adb, serial, log_cb=log_cb)
+        # And from ad-driven foreground hijack (Play Store / external app).
+        ensure_app_foreground(adb, serial, YOUTUBE_PKG, log_cb=log_cb)
 
         nap = min(end - time.time(), random.uniform(8.0, 20.0))
         if interruptible_sleep(stop_event, max(0.5, nap)):
@@ -637,6 +741,14 @@ def run_youtube_task(
 
     if _cancelled(stop_event):
         return True
+
+    # Operator requirement: keyword search must originate from the Home tab,
+    # not from inside Shorts. Navigate explicitly so the SERP UI is the
+    # standard Watch-page layout, not a Shorts-embedded result list.
+    _go_to_home_tab(adb, serial, size, log_cb)
+    if _cancelled(stop_event):
+        return True
+    ensure_app_foreground(adb, serial, YOUTUBE_PKG, log_cb=log_cb)
 
     if not _do_search(adb, serial, size, keyword, log_cb):
         return False

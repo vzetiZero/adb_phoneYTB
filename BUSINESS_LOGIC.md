@@ -157,6 +157,8 @@ Mỗi loop:
 2. `_go_to_shorts()` — deep-link `vnd.youtube://shorts` → fallback bottom-nav theo content-desc (multi-locale: `Shorts`, `쇼츠`, `ショート`, `短视频`) → fallback blind tap ~30%×96% màn hình.
 3. `_scroll_reels(n_reels)` — vòng `n = random[reels_min..reels_max]`:
    - `ensure_portrait()` đầu mỗi reel (watchdog rotation).
+   - `ensure_app_foreground(YOUTUBE_PKG)` — nếu Shorts ad đẩy sang Google Play/external app, back về YouTube hoặc force-stop hijacker rồi monkey relaunch.
+   - `_dismiss_overlay()` — nếu bottom sheet (mô tả/share/dialog) đang đè lên reel (detect qua `bottom_sheet_container` res-id hoặc title "설명"/"Description"/"공유"/"Share"...), bấm `back` để đóng. Tránh swipe-up tap vào nội dung sheet.
    - `_ensure_in_shorts()` mỗi reel (resource-id `reel_player_page_container` hoặc nút Like/Comment) — nếu rớt khỏi Shorts thì vào lại tối đa 2 lần.
    - Sleep `random[delay_min..delay_max]` (xem reel).
    - Với xác suất `like_rate`: `_maybe_like()` — 4 tầng fallback:
@@ -167,6 +169,8 @@ Mỗi loop:
    - `swipe_up()` sang reel kế tiếp.
    - Nếu `shorts_time_limit_sec > 0` mà vượt → break sớm.
 4. `back()` thoát Shorts.
+5. **`_go_to_home_tab()`** — về Home tab YouTube (deep-link `vnd.youtube://feed/home` → fallback tap bottom-nav slot trái → fallback monkey LAUNCHER). Theo yêu cầu vận hành: search keyword phải xuất phát từ Home, không phải từ trong Shorts.
+6. `_do_search(keyword)` + `_tap_top_result()` + `_watch_video()` (mỗi nap có `ensure_portrait` + `ensure_app_foreground`).
 
 > **Comment đã bị gỡ bỏ** theo yêu cầu vận hành: tỉ lệ false-positive cao (gõ nhầm ô tìm kiếm) và rủi ro spam-ban YouTube. File `comments.txt` còn lưu nhưng không được nạp.
 5. `_do_search(keyword)`:
