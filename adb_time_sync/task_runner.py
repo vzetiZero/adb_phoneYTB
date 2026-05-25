@@ -195,6 +195,8 @@ def _run_one_task(
                     adb,
                     serial,
                     task.keyword,
+                    do_shorts=bool(task.opts.get("do_shorts", True)),
+                    do_search=bool(task.opts.get("do_search", True)),
                     extra_keywords=extras,
                     reels_min=int(task.opts.get("reels_min", 5)),
                     reels_max=int(task.opts.get("reels_max", 10)),

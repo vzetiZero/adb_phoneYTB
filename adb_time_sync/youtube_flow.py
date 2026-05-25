@@ -314,16 +314,49 @@ def _skip_ad_if_present(adb: ADB, serial: str, size: Size, log_cb=None) -> bool:
 
 
 def _go_to_home_tab(adb: ADB, serial: str, size: Size, log_cb=None) -> bool:
-    """Navigate to the Home feed so the upcoming search starts from there.
+    """Navigate to YouTube's Home feed. CRUCIAL post-condition: we must be
+    NEITHER in Shorts NOR in Watch view when this returns — the upcoming
+    search must fire from a Home-feed context so the SERP renders as the
+    standard Watch layout, not embedded inside the Shorts player.
 
-    Operator request: the search-keyword step should fire from Home, not
-    from inside Shorts (where deep-link search occasionally lands results
-    inside the Shorts player). Strategy:
-      1) Deep-link `vnd.youtube://feed/home` (most reliable, no UI tap).
-      2) Tap the leftmost bottom-nav slot at y≈96% height.
-      3) Last resort: monkey LAUNCHER (always lands on Home post-launch).
-    Verified by HOME_TAB_RES_IDS in the resulting dump.
+    Operator report: even with the old version, search sometimes still
+    landed in Shorts. Root cause was that the Shorts player overlay can
+    stay visible on top while HOME_TAB_RES_IDS exist in the dump
+    underneath, so the verify-by-resource-id passed but we were still
+    in Shorts. Strengthened strategy:
+
+      0) Aggressive back-out: press BACK up to 5 times until _is_in_shorts
+         reports False AND we're not in Watch view (no PLAYER_RES_IDS).
+      1) Deep-link feed/home (2 URL variants).
+      2) Tap leftmost bottom-nav slot.
+      3) Monkey LAUNCHER (last resort).
+
+      After each attempt, verify Home AND not-in-Shorts before accepting.
     """
+
+    def _at_home(xml_str: str) -> bool:
+        """Strict Home check: Home res-id present, NO player res-id,
+        and _is_in_shorts says no."""
+        if not xml_str:
+            return False
+        if not find_by_resource_id(xml_str, *HOME_TAB_RES_IDS):
+            return False
+        if find_by_resource_id(xml_str, *PLAYER_RES_IDS):
+            return False  # video player still up
+        in_shorts, _reason = _is_in_shorts(adb, serial)
+        return not in_shorts
+
+    # Step 0 — aggressive back-out so subsequent nav isn't fighting Shorts.
+    for i in range(5):
+        in_shorts, _ = _is_in_shorts(adb, serial)
+        if not in_shorts:
+            break
+        back(adb, serial)
+        time.sleep(lognormal_sleep(0.3, 0.2, 0.3, 1.0))
+    else:
+        _log(log_cb, "[YT] Back 5 lần vẫn còn Shorts — sẽ ép qua deep-link")
+
+    # Step 1 — deep-link.
     deep_links = (
         "vnd.youtube://feed/home",
         "vnd.youtube://www.youtube.com/feed/home",
@@ -331,27 +364,33 @@ def _go_to_home_tab(adb: ADB, serial: str, size: Size, log_cb=None) -> bool:
     for url in deep_links:
         r = adb.shell(serial, f'am start -a android.intent.action.VIEW -d "{url}"')
         if r.ok:
-            time.sleep(lognormal_sleep(0.6, 0.4, 0.8, 2.5))
+            time.sleep(lognormal_sleep(0.6, 0.4, 0.9, 2.5))
             xml = dump_ui(adb, serial)
-            if xml and find_by_resource_id(xml, *HOME_TAB_RES_IDS):
-                _log(log_cb, f"[YT] Về Home tab qua {url}")
+            if _at_home(xml or ""):
+                _log(log_cb, f"[YT] Về Home tab qua {url} (verified)")
                 return True
 
-    # Tap bottom-nav home (leftmost slot, ~10% width × 96% height).
+    # Step 2 — bottom-nav home tap (leftmost slot ~10% × 96%).
     nav_x = int(size.width * 0.10)
     nav_y = int(size.height * 0.96)
     tap(adb, serial, nav_x, nav_y)
-    time.sleep(lognormal_sleep(0.5, 0.4, 0.6, 2.0))
+    time.sleep(lognormal_sleep(0.5, 0.4, 0.7, 2.0))
     xml = dump_ui(adb, serial)
-    if xml and find_by_resource_id(xml, *HOME_TAB_RES_IDS):
-        _log(log_cb, f"[YT] Về Home tab qua bottom-nav @({nav_x},{nav_y})")
+    if _at_home(xml or ""):
+        _log(log_cb, f"[YT] Về Home tab qua bottom-nav @({nav_x},{nav_y}) (verified)")
         return True
 
-    # Last resort: monkey LAUNCHER.
+    # Step 3 — monkey LAUNCHER. This rebinds the activity stack to Home.
     adb.shell(serial, f"monkey -p {YOUTUBE_PKG} -c android.intent.category.LAUNCHER 1")
-    time.sleep(lognormal_sleep(0.6, 0.4, 0.8, 2.5))
-    _log(log_cb, "[YT] Về Home tab qua monkey LAUNCHER (fallback)")
-    return True
+    time.sleep(lognormal_sleep(0.8, 0.4, 1.0, 3.0))
+    xml = dump_ui(adb, serial)
+    if _at_home(xml or ""):
+        _log(log_cb, "[YT] Về Home tab qua monkey LAUNCHER (verified)")
+        return True
+
+    # Could not verify. Accept anyway — search will retry from wherever we are.
+    _log(log_cb, "[YT] Không verify được Home tab; vẫn tiếp tục (search có thể chệch)")
+    return False
 
 
 def _save_debug_dump(serial: str, xml: str, tag: str) -> None:
@@ -605,16 +644,30 @@ def _scroll_reels(
     log_cb=None,
 ) -> None:
     start_ts = time.time()
-    for i in range(n_reels):
+    # Infinite mode: shorts_time_limit_sec == 0 means "scroll Reels forever
+    # until the operator hits Cancel" — both the time cap AND the reel-count
+    # cap are disabled. (Previously 0 meant "no time limit but still bounded
+    # by reels_min/max", which confused operators who expected 0 = ∞.)
+    infinite_mode = (shorts_time_limit_sec <= 0)
+    if infinite_mode:
+        _log(log_cb, "[YT] Reel mode = VÔ HẠN (giới hạn=0) — lướt tới khi Cancel")
+
+    i = 0
+    while True:
         if _cancelled(stop_event):
             return
-        if shorts_time_limit_sec > 0 and (time.time() - start_ts) >= shorts_time_limit_sec:
-            _log(
-                log_cb,
-                f"[YT] Đạt thời gian giới hạn Shorts ({shorts_time_limit_sec:.0f}s),"
-                f" đã lướt {i} reel. Thoát Shorts, chuyển sang search.",
-            )
-            return
+        # Bounded mode: stop when either the reel count OR the time cap hits.
+        if not infinite_mode:
+            if i >= n_reels:
+                return
+            if (time.time() - start_ts) >= shorts_time_limit_sec:
+                _log(
+                    log_cb,
+                    f"[YT] Đạt thời gian giới hạn Shorts ({shorts_time_limit_sec:.0f}s),"
+                    f" đã lướt {i} reel. Thoát Shorts, chuyển sang search.",
+                )
+                return
+
         # Watchdog: a stray ad-interstitial or mis-tap can rotate the screen
         # mid-Shorts; recover before swiping with stale coordinates.
         ensure_portrait(adb, serial, log_cb=log_cb)
@@ -632,7 +685,8 @@ def _scroll_reels(
             return
 
         watch = random.uniform(delay_min, delay_max)
-        _log(log_cb, f"[YT] Reel {i+1}/{n_reels}: xem {watch:.1f}s")
+        label = f"{i+1}/∞" if infinite_mode else f"{i+1}/{n_reels}"
+        _log(log_cb, f"[YT] Reel {label}: xem {watch:.1f}s")
         if interruptible_sleep(stop_event, watch):
             return
 
@@ -653,6 +707,7 @@ def _scroll_reels(
 
         swipe_up(adb, serial, size, strong=random.random() < 0.3)
         time.sleep(lognormal_sleep(0.4, 0.4, 0.4, 1.6))
+        i += 1
 
 
 def _open_search(adb: ADB, serial: str, size: Size, log_cb=None) -> bool:
@@ -736,68 +791,124 @@ def _wait_serp_ready(
     return False
 
 
+def _bounds_contains(outer, inner) -> bool:
+    """True iff `inner` rectangle lies entirely within `outer` rectangle."""
+    ox1, oy1, ox2, oy2 = outer
+    ix1, iy1, ix2, iy2 = inner
+    return ix1 >= ox1 and iy1 >= oy1 and ix2 <= ox2 and iy2 <= oy2
+
+
+def _subtree_has_ad_marker(target, all_nodes, labels) -> bool:
+    """True iff any node geometrically inside `target.bounds` carries an
+    ad text/desc label.
+
+    Why: on YT SERP the outermost clickable ViewGroup of a sponsored
+    result has empty text/desc — the "광고" / "Sponsored" badge lives in
+    a CHILD TextView a few levels deeper. Checking only the clickable
+    node misses every ad. We don't have parent/child links from the
+    uiautomator dump, so we approximate the subtree with "any node whose
+    bounds are fully inside the clickable node's bounds".
+    """
+    for n in all_nodes:
+        if n is target:
+            continue
+        if not _bounds_contains(target.bounds, n.bounds):
+            continue
+        text = ((n.text or "") + " " + (n.desc or "")).lower()
+        if not text.strip():
+            continue
+        if any(lbl in text for lbl in labels):
+            return True
+    return False
+
+
+# Resource-id substrings that signal an ad slot directly (skip the whole node).
+AD_RES_ID_FRAGMENTS = (
+    "promoted",
+    "sponsored",
+    "ad_badge",
+    "ad_text",
+    "ad_overlay",
+    "ad_container",
+    "endcap_layout",
+)
+
+
 def _tap_top_result(adb: ADB, serial: str, size: Size, log_cb=None) -> bool:
     """Tap a random top-3 ORGANIC video result on the SERP.
 
-    Past failure mode: the picker accepted any clickable ViewGroup taller
-    than 10% of screen — including the Shorts shelf carousel, the channel
-    chip strip, and the first "Sponsored" ad. Tapping any of those does
-    not open Watch view, so `_watch_video` then idle-slept on the SERP.
-
-    Now:
-      - Wait for SERP render (`_wait_serp_ready`).
-      - Filter out `광고 / Sponsored / 広告 / 广告 / Quảng cáo` ad markers.
-      - Skip nodes whose res-id contains "shorts" or "reel" (Shorts shelf).
-      - Skip nodes above 10% height (filter chips / search bar).
-      - Require text/desc ≥ 20 chars (real video title, not button).
-      - Sort top-down, pick random of top-3.
-      - Fallback tap at (50%, 35%) if nothing matches.
+    Filter chain (each independently sufficient to skip a node):
+      1) Wait up to 6s for SERP render.
+      2) Ad-marker text in own OR descendant nodes (subtree bounds check).
+         Closes the "outer clickable is empty, '광고' badge is in a child
+         TextView" gap that let sponsored results through before.
+      3) Resource-id substring match against AD_RES_ID_FRAGMENTS.
+      4) Skip Shorts-shelf and reel-related nodes.
+      5) Skip nodes above 10% height (filter chip strip).
+      6) Require text/desc ≥ 5 chars for video-RID nodes, ≥ 20 for ViewGroup.
+      7) Sort by (priority, y), pick random of top-3.
+      8) Fallback: tap (50%, 45%) — deeper than before, lands below most
+         un-detected ad blocks.
     """
     _wait_serp_ready(adb, serial, log_cb=log_cb)
 
     xml = dump_ui(adb, serial)
     if not xml:
         _log(log_cb, "[YT] SERP dump rỗng, fallback tap giữa")
-        tap(adb, serial, size.width // 2, int(size.height * 0.35))
+        tap(adb, serial, size.width // 2, int(size.height * 0.45))
         time.sleep(lognormal_sleep(0.8, 0.4, 1.0, 3.0))
         return True
 
     from .ui_state import iter_nodes
+    all_nodes = list(iter_nodes(xml))
     candidates = []
-    for n in iter_nodes(xml):
+    skipped_ads = 0
+    for n in all_nodes:
         if not n.clickable:
             continue
         rid = (n.resource_id or "").lower()
         text = (n.text or "") + " " + (n.desc or "")
         low = text.lower()
 
-        # Skip ads.
+        # 2a) Ad label in own text/desc.
         if any(bad in low for bad in YT_AD_LABELS):
+            skipped_ads += 1
             continue
-        # Skip Shorts shelf and reel-related nodes.
+        # 2b) Ad label in any descendant inside this node's bounds.
+        if _subtree_has_ad_marker(n, all_nodes, YT_AD_LABELS):
+            skipped_ads += 1
+            continue
+        # 3) Known ad-slot res-id fragments.
+        if any(frag in rid for frag in AD_RES_ID_FRAGMENTS):
+            skipped_ads += 1
+            continue
+        # 4) Shorts shelf carousel and reel-related entries.
         if "shorts" in rid or "reel" in rid:
             continue
 
         x1, y1, x2, y2 = n.bounds
         h = y2 - y1
-        # Above the SERP body (search bar / filter chips area).
+        # 5) Above the SERP body (search bar / filter chips area).
         if y1 < size.height * 0.10:
             continue
-        # Strong: explicit video resource-id with title text.
+        # 6a) Strong: explicit video resource-id with title text.
         if "video" in rid and len(text.strip()) >= 5:
-            candidates.append((n, 0))  # priority 0 (highest)
+            candidates.append((n, 0))
             continue
-        # Weak: big clickable block with a meaningful title.
+        # 6b) Weak: big clickable block with a meaningful title.
         if n.class_name in ("android.view.ViewGroup", "android.widget.FrameLayout"):
             if h > size.height * 0.12 and len(text.strip()) >= 20:
                 candidates.append((n, 1))
 
+    if skipped_ads:
+        _log(log_cb, f"[YT] Lọc bỏ {skipped_ads} kết quả quảng cáo trên SERP")
+
     if not candidates:
-        # Heuristic fallback — tap first organic slot (~35% height keeps us
-        # under the Shorts shelf which usually sits at 15-30%).
-        y = int(size.height * 0.35)
+        # Fallback tap deeper than the typical sponsored-result block
+        # (sponsored cards end around 35-40% height on YT mobile SERP).
+        y = int(size.height * 0.45)
         x = size.width // 2
-        _log(log_cb, f"[YT] Không tìm thấy video kết quả, fallback tap @({x},{y})")
+        _log(log_cb, f"[YT] Không tìm thấy video organic, fallback tap @({x},{y})")
         tap(adb, serial, x, y)
         time.sleep(lognormal_sleep(0.8, 0.4, 1.0, 3.0))
         return True
@@ -895,6 +1006,8 @@ def run_youtube_task(
     serial: str,
     keyword: str,
     *,
+    do_shorts: bool = True,
+    do_search: bool = True,
     extra_keywords: Optional[list[str]] = None,
     reels_min: int = 5,
     reels_max: int = 10,
@@ -942,34 +1055,41 @@ def run_youtube_task(
     )
 
     # ----- Phase 1: Shorts -----
-    if _go_to_shorts(adb, serial, size, log_cb):
-        n_reels = random.randint(reels_min, reels_max)
-        limit_note = (
-            f", giới hạn {shorts_time_limit_sec:.0f}s"
-            if shorts_time_limit_sec > 0
-            else " (không giới hạn thời gian)"
-        )
-        _log(
-            log_cb,
-            f"[YT] Sẽ lướt tối đa {n_reels} reel, delay {delay_min:.0f}-{delay_max:.0f}s, "
-            f"like_rate={like_rate}{limit_note}",
-        )
-        _scroll_reels(
-            adb,
-            serial,
-            size,
-            n_reels,
-            stop_event,
-            delay_min=delay_min,
-            delay_max=delay_max,
-            like_rate=like_rate,
-            shorts_time_limit_sec=shorts_time_limit_sec,
-            log_cb=log_cb,
-        )
-        if _cancelled(stop_event):
-            return True
-        back(adb, serial)
-        time.sleep(lognormal_sleep(0.5, 0.4, 0.5, 1.8))
+    if do_shorts:
+        if _go_to_shorts(adb, serial, size, log_cb):
+            n_reels = random.randint(reels_min, reels_max)
+            limit_note = (
+                f", giới hạn {shorts_time_limit_sec:.0f}s"
+                if shorts_time_limit_sec > 0
+                else " (không giới hạn thời gian)"
+            )
+            _log(
+                log_cb,
+                f"[YT] Sẽ lướt tối đa {n_reels} reel, delay {delay_min:.0f}-{delay_max:.0f}s, "
+                f"like_rate={like_rate}{limit_note}",
+            )
+            _scroll_reels(
+                adb,
+                serial,
+                size,
+                n_reels,
+                stop_event,
+                delay_min=delay_min,
+                delay_max=delay_max,
+                like_rate=like_rate,
+                shorts_time_limit_sec=shorts_time_limit_sec,
+                log_cb=log_cb,
+            )
+            if _cancelled(stop_event):
+                return True
+            back(adb, serial)
+            time.sleep(lognormal_sleep(0.5, 0.4, 0.5, 1.8))
+    else:
+        _log(log_cb, "[YT] Bỏ qua Shorts (do_shorts=False)")
+
+    if not do_search:
+        _log(log_cb, "[YT] Bỏ qua Search (do_search=False), kết thúc cycle")
+        return True
 
     # ----- Phase 2: search + watch for each keyword -----
     for idx, kw in enumerate(keywords, start=1):

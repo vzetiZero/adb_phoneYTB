@@ -154,6 +154,8 @@ File: [adb_time_sync/youtube_flow.py:run_youtube_task](adb_time_sync/youtube_flo
 
 **Loop semantics (revised)**: 1 task = 1 cycle, lặp `loops` lần. Mỗi cycle gồm 1 lần Shorts + lần lượt tất cả keywords. Ví dụ `loops=3` + 4 keyword → 3 Shorts sessions + 12 watches, không phải 12 Shorts sessions.
 
+**Phase toggles**: 2 checkbox GUI (`do_shorts`, `do_search`) cho phép chạy Shorts-only, Search-only, hoặc cả hai. Yêu cầu ≥ 1 trong 2 bật. Search-only thì cycle = `Home tab → search → watch`, không qua Shorts.
+
 Mỗi loop (= 1 cycle):
 1. `_open_youtube()` — **Clean launch**: `home` → `am force-stop com.google.android.youtube` → `am kill-all` → `monkey -p ... LAUNCHER` → verify foreground. Bước này bắt buộc vì BoxPhone hay khởi động vào session Shorts đang dính quảng cáo cũ; nếu không force-stop thì swipe-up sẽ tap vào nút "Visit" của ad thay vì cuộn sang reel kế tiếp.
 2. `_go_to_shorts()` — deep-link `vnd.youtube://shorts` → fallback bottom-nav theo content-desc (multi-locale: `Shorts`, `쇼츠`, `ショート`, `短视频`) → fallback blind tap ~30%×96% màn hình.

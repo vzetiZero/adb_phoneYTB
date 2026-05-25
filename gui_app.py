@@ -149,11 +149,26 @@ class MainWindow(QtWidgets.QMainWindow):
 
         hint = QtWidgets.QLabel(
             "<b>Workflow:</b> về Home → force-stop YouTube → mở YouTube sạch → "
-            "lướt Shorts (N reel × Y giây/reel, like theo tỉ lệ) → "
-            "search từ khoá → xem video ngẫu nhiên (W giây). Comment đã bị tắt."
+            "[Shorts: lướt reel + like] → [Search: tìm từ khoá → xem video]. "
+            "Bật/tắt mỗi phase bằng 2 checkbox dưới. Comment đã bị tắt."
         )
         hint.setWordWrap(True)
         v.addWidget(hint)
+
+        # Two independent phase toggles — operator can run Shorts-only,
+        # Search-only, or both. Validation requires at least one to be on.
+        phase_box = QtWidgets.QGroupBox("Phase bật/tắt")
+        phase_h = QtWidgets.QHBoxLayout(phase_box)
+        self.yt_do_shorts = QtWidgets.QCheckBox("Xem Shorts (lướt reel + like)")
+        self.yt_do_shorts.setChecked(True)
+        self.yt_do_shorts.setToolTip("Nếu tắt: bỏ phase Shorts, vào thẳng tìm kiếm")
+        self.yt_do_search = QtWidgets.QCheckBox("Tìm từ khoá + xem video")
+        self.yt_do_search.setChecked(True)
+        self.yt_do_search.setToolTip("Nếu tắt: chỉ lướt Shorts, không search")
+        phase_h.addWidget(self.yt_do_shorts)
+        phase_h.addWidget(self.yt_do_search)
+        phase_h.addStretch(1)
+        v.addWidget(phase_box)
 
         form = QtWidgets.QFormLayout()
         v.addLayout(form)
@@ -186,7 +201,11 @@ class MainWindow(QtWidgets.QMainWindow):
         self.yt_shorts_max_min = QtWidgets.QSpinBox()
         self.yt_shorts_max_min.setRange(0, 720)
         self.yt_shorts_max_min.setValue(10)
-        self.yt_shorts_max_min.setSuffix(" phút  (0 = không giới hạn, theo reel min/max)")
+        self.yt_shorts_max_min.setSuffix(" phút  (0 = VÔ HẠN, lướt tới khi Cancel)")
+        self.yt_shorts_max_min.setToolTip(
+            "0 = lướt Reel vô hạn, bỏ qua cả reel min/max — chỉ dừng khi bấm Cancel.\n"
+            "> 0 = dừng khi đạt thời gian này HOẶC đạt reel max, cái nào tới trước."
+        )
         form.addRow("Thời gian tối đa lướt Reel", self.yt_shorts_max_min)
 
         self.yt_like_rate = QtWidgets.QDoubleSpinBox()
@@ -481,9 +500,19 @@ class MainWindow(QtWidgets.QMainWindow):
         iteration, so loops=3 with 4 keywords = 3 Shorts sessions + 12
         watches (not 12 Shorts sessions like before).
         """
-        kws = self._read_keywords(self.yt_keywords)
-        if not kws:
-            return []
+        do_shorts = self.yt_do_shorts.isChecked()
+        do_search = self.yt_do_search.isChecked()
+        if not do_shorts and not do_search:
+            self._log("[LỖI] YouTube: bật ít nhất 1 trong 2 phase (Shorts hoặc Search)")
+            return None
+
+        kws = self._read_keywords(self.yt_keywords) if do_search else []
+        # If search is off but no keywords, that's OK — Shorts-only run.
+        # If search is on but no keywords, fail.
+        if do_search and not kws:
+            self._log("[LỖI] YouTube: bật Search nhưng chưa nhập từ khoá")
+            return None
+
         if self.yt_reels_min.value() > self.yt_reels_max.value():
             self._log("[LỖI] YouTube: reels_min > reels_max"); return None
         if self.yt_watch_min.value() > self.yt_watch_max.value():
@@ -496,6 +525,8 @@ class MainWindow(QtWidgets.QMainWindow):
         loops = int(self.yt_loops.value())
         shorts_limit_sec = int(self.yt_shorts_max_min.value()) * 60
         opts = {
+            "do_shorts": do_shorts,
+            "do_search": do_search,
             "all_keywords": list(kws),
             "reels_min": int(self.yt_reels_min.value()),
             "reels_max": int(self.yt_reels_max.value()),
@@ -507,7 +538,9 @@ class MainWindow(QtWidgets.QMainWindow):
             "watch_max": float(self.yt_watch_max.value()),
         }
         # Single task; task.keyword is the primary (first) for stats display.
-        return [Task(app="youtube", keyword=kws[0], loops=loops, opts=opts)]
+        # When Shorts-only (no keywords), use a placeholder so Task is valid.
+        primary_kw = kws[0] if kws else "(shorts-only)"
+        return [Task(app="youtube", keyword=primary_kw, loops=loops, opts=opts)]
 
     def _build_chrome_tasks(self) -> list[Task] | None:
         lines = self._read_keywords(self.cr_keywords)
