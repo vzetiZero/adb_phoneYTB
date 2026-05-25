@@ -1,0 +1,28 @@
+# tasks.txt - mỗi dòng = 1 task
+# Cú pháp: app|keyword|loops[|key=value,key=value,...]
+#   app    : youtube | chrome
+#   keyword: từ khoá tìm kiếm (có thể có dấu, khoảng trắng)
+#   loops  : số lần lặp task (>= 1)
+#   opts   : (tuỳ chọn — dùng dấu phẩy ngăn cách)
+#
+# === Tham số YouTube ===
+#   reels_min, reels_max : số reel sẽ lướt trước khi search (mặc định 5 / 10)
+#   delay_min, delay_max : số giây xem mỗi reel              (mặc định 10 / 15)
+#   like_rate            : xác suất like 1 reel  (0..1)       (mặc định 1.0 = mọi reel đều like)
+#   comment_rate         : xác suất comment 1 reel (0..1)     (mặc định 0.0 = không comment)
+#   watch_min, watch_max : giây xem video sau khi search      (mặc định 60 / 300)
+#
+# === Tham số Chrome ===
+#   watch_min, watch_max : giây lướt trang đích               (mặc định 60 / 300)
+#   prefer_domain        : domain ưu tiên trên SERP (vd news.naver.com)
+#                          — nếu không thấy sau khi cuộn, mở thẳng https://<domain>/
+#
+# Dòng bắt đầu bằng '#' bị bỏ qua.
+
+youtube|baomoi|5
+chrome|tin nóng hôm nay|3
+# Ví dụ: search "naver news" trên Google rồi tap đúng news.naver.com:
+chrome|naver news|3|prefer_domain=news.naver.com,watch_min=90,watch_max=240
+# youtube|nhạc trẻ 2026|10|reels_min=8,reels_max=12,delay_min=12,delay_max=20
+# youtube|review điện thoại|3|comment_rate=0.3,watch_min=120,watch_max=240
+# chrome|giá vàng hôm nay|2|watch_min=45,watch_max=120

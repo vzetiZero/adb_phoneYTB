@@ -1,0 +1,31 @@
+# --- Build artifacts ---
+build/
+dist/
+*.spec.bak
+*.pyc
+__pycache__/
+.pyinstaller/
+
+# --- Local runtime data ---
+app.db
+app.db-journal
+debug_dumps/
+*.log
+
+# --- Editor / OS ---
+.vscode/
+.idea/
+.claude/
+*.swp
+Thumbs.db
+.DS_Store
+
+# --- Like-icon templates added per-environment ---
+# Keep README, ignore user-supplied PNG crops.
+like_templates/*.png
+
+# --- Python env ---
+.venv/
+venv/
+env/
+*.egg-info/
