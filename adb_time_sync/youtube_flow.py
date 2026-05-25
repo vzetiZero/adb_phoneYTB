@@ -112,15 +112,83 @@ YT_OVERLAY_RES_IDS = (
     "com.google.android.youtube:id/dialog_container",
 )
 # Multi-locale labels that ONLY appear in such overlays (not in Shorts player).
-# 설명 = Description (Korean target), used as a positive signal.
+# Covers TWO distinct overlays seen in the wild:
+#   A. Description bottom-sheet (title = "설명" / "Description" + body text).
+#   B. "More options" bottom-sheet (Shorts ⋮ menu): a list of menu items
+#      including 설명 / 재생목록에 저장 / 자막 / 화질 / 관심 없음 / 채널 추천 안함 / 신고 / 의견 보내기.
+# Detecting ANY of these labels in the dump is a strong positive signal —
+# none of them ever appear in the regular Shorts player surface.
 YT_OVERLAY_TITLES = (
+    # Description
     "설명", "Description", "Mô tả", "说明", "説明",
+    # Share
     "공유", "Share", "Chia sẻ", "分享", "共有",
+    # More-options menu items (Korean target ROM)
+    "재생목록에 저장",     # Save to playlist
+    "관심 없음",          # Not interested  (DANGEROUS if tapped — demotes channel)
+    "채널 추천 안함",      # Don't recommend channel
+    "신고",               # Report
+    "의견 보내기",         # Send feedback
+    # English equivalents for non-Korean ROMs
+    "Save to playlist",
+    "Not interested",
+    "Don't recommend channel",
+    "Report",
+    "Send feedback",
+    # Vietnamese equivalents
+    "Lưu vào danh sách phát",
+    "Không quan tâm",
+    "Không đề xuất kênh này",
+    "Báo cáo",
+    "Gửi phản hồi",
 )
 HOME_TAB_RES_IDS = (
     "com.google.android.youtube:id/home_feed_swipe_refresh_layout",
     "com.google.android.youtube:id/big_yt_logo",
     "com.google.android.youtube:id/youtube_logo",
+)
+SERP_RESULTS_RES_IDS = (
+    "com.google.android.youtube:id/results",
+    "com.google.android.youtube:id/search_results",
+)
+PLAYER_RES_IDS = (
+    "com.google.android.youtube:id/player_view",
+    "com.google.android.youtube:id/watch_player",
+    "com.google.android.youtube:id/player_overlay",
+    "com.google.android.youtube:id/floaty_bar",
+    "com.google.android.youtube:id/player_fragment_container",
+)
+# Same ad copy as Chrome SERP — same Google ad inventory shows on YT.
+YT_AD_LABELS = (
+    "광고", "스폰서",
+    "sponsored", "ad ·", "ads ·", "promoted",
+    "quảng cáo", "được tài trợ",
+    "广告", "赞助商",
+    "広告", "スポンサー",
+)
+# "Skip Ad" button copy on YouTube ads. Layout seen on Korean BoxPhone:
+# a small rounded chip sitting on the right edge of the player at ~50%
+# height showing "건너뛰기" (Skip) once the ad's skippable window opens.
+SKIP_AD_LABELS = (
+    "건너뛰기", "광고 건너뛰기",
+    "Skip", "Skip ad", "Skip ads", "Skip Ad",
+    "Bỏ qua", "Bỏ qua quảng cáo",
+    "Saltar", "Saltar anuncio",
+    "Ignorer", "Ignorer l'annonce",
+    "跳过", "跳过广告",
+    "スキップ", "広告をスキップ",
+    "Überspringen",
+)
+SKIP_AD_RES_IDS = (
+    "com.google.android.youtube:id/skip_ad_button",
+    "com.google.android.youtube:id/skip_ad_button_text",
+    "com.google.android.youtube:id/ad_skip_button",
+    "com.google.android.youtube:id/skip_button",
+)
+# Close-X icons on app-install cards layered under Shorts ads.
+AD_CARD_CLOSE_RES_IDS = (
+    "com.google.android.youtube:id/close_button",
+    "com.google.android.youtube:id/dismiss_button",
 )
 
 
@@ -184,18 +252,65 @@ def _dismiss_overlay(adb: ADB, serial: str, size: Size, log_cb=None) -> bool:
     has_overlay = bool(find_by_resource_id(xml, *YT_OVERLAY_RES_IDS))
     if not has_overlay:
         # Title-based fallback: a Shorts player never shows these strings,
-        # so seeing one is strong evidence an overlay is up.
+        # so seeing one is strong evidence an overlay is up. Use contains=True
+        # to tolerate whitespace / mixed-case / partial matches in the menu.
         for title in YT_OVERLAY_TITLES:
-            if find_by_text(xml, title, contains=False):
+            if find_by_text(xml, title, contains=True):
                 has_overlay = True
                 break
     if not has_overlay:
         return False
 
-    _log(log_cb, "[YT] Phát hiện overlay (mô tả/share/dialog) — đóng bằng back")
+    _log(log_cb, "[YT] Phát hiện overlay (mô tả/share/menu) — đóng bằng back")
     back(adb, serial)
     time.sleep(lognormal_sleep(0.4, 0.3, 0.4, 1.2))
     return True
+
+
+def _skip_ad_if_present(adb: ADB, serial: str, size: Size, log_cb=None) -> bool:
+    """Tap "건너뛰기" / "Skip Ad" / equivalent if YouTube is showing a
+    skippable ad on top of a Shorts reel.
+
+    Detection priority:
+      1. Skip-ad button by resource-id (cleanest, but obfuscated on some YT builds).
+      2. Skip-ad button by content-desc/text label (multi-locale).
+      3. App-install card close-X by resource-id (for non-skippable ads
+         that overlay the bottom half of Shorts with an install panel).
+
+    Returns True if we tapped something. Caller can re-check Shorts presence.
+    """
+    xml = dump_ui(adb, serial)
+    if not xml:
+        return False
+
+    # 1) Resource-id Skip button
+    node = find_by_resource_id(xml, *SKIP_AD_RES_IDS)
+    if node and node.clickable:
+        tap(adb, serial, *node.center)
+        _log(log_cb, f"[YT] Tap Skip Ad (res-id) @{node.center}")
+        time.sleep(lognormal_sleep(0.5, 0.3, 0.5, 1.5))
+        return True
+
+    # 2) Label match — Skip button uses the visible string, not res-id, on
+    #    many YT versions. Require clickable to avoid tapping a static label.
+    node = _find_node_with_label(xml, SKIP_AD_LABELS)
+    if node and node.clickable:
+        tap(adb, serial, *node.center)
+        _log(log_cb, f"[YT] Tap Skip Ad (label) @{node.center}: text={node.text!r} desc={node.desc!r}")
+        time.sleep(lognormal_sleep(0.5, 0.3, 0.5, 1.5))
+        return True
+
+    # 3) Non-skippable app-install card → close X (frees the lower half of
+    #    Shorts so swipe-up reaches the player area).
+    if any(lbl in (xml or "") for lbl in YT_AD_LABELS):
+        close = find_by_resource_id(xml, *AD_CARD_CLOSE_RES_IDS)
+        if close and close.clickable:
+            tap(adb, serial, *close.center)
+            _log(log_cb, f"[YT] Đóng app-install card (res-id close) @{close.center}")
+            time.sleep(lognormal_sleep(0.5, 0.3, 0.5, 1.5))
+            return True
+
+    return False
 
 
 def _go_to_home_tab(adb: ADB, serial: str, size: Size, log_cb=None) -> bool:
@@ -505,6 +620,9 @@ def _scroll_reels(
         ensure_portrait(adb, serial, log_cb=log_cb)
         # Recover if a Shorts ad bounced us into Play Store / external app.
         ensure_app_foreground(adb, serial, YOUTUBE_PKG, log_cb=log_cb)
+        # Skip pre-roll / mid-roll ads ("건너뛰기" / "Skip") so swipe-up
+        # doesn't waste the reel slot watching a sponsor video.
+        _skip_ad_if_present(adb, serial, size, log_cb)
         # Dismiss any bottom-sheet (description / share / more menu) that
         # would otherwise eat our swipe-up gesture.
         _dismiss_overlay(adb, serial, size, log_cb)
@@ -588,35 +706,129 @@ def _do_search(adb: ADB, serial: str, size: Size, keyword: str, log_cb=None) -> 
     return True
 
 
+def _wait_serp_ready(
+    adb: ADB,
+    serial: str,
+    timeout: float = 6.0,
+    log_cb=None,
+) -> bool:
+    """Poll dump_ui until SERP indicators are present.
+
+    Deep-link search returns immediately but YT needs ~1-3s to render the
+    result list. Before that point `_tap_top_result` was tapping into empty
+    space or onto the loading spinner. Waiting on `SERP_RESULTS_RES_IDS`
+    or a video-like resource id makes the next tap deterministic.
+    """
+    end = time.time() + timeout
+    while time.time() < end:
+        xml = dump_ui(adb, serial)
+        if xml:
+            if find_by_resource_id(xml, *SERP_RESULTS_RES_IDS):
+                return True
+            # Some YT versions don't expose the parent res-id; accept if we
+            # can see at least one node whose res-id contains "video".
+            from .ui_state import iter_nodes
+            for n in iter_nodes(xml):
+                if "video" in (n.resource_id or "").lower() and n.clickable:
+                    return True
+        time.sleep(0.4)
+    _log(log_cb, f"[YT] SERP chưa render sau {timeout:.1f}s, vẫn tiếp tục")
+    return False
+
+
 def _tap_top_result(adb: ADB, serial: str, size: Size, log_cb=None) -> bool:
-    """Tap a random top-3 video result."""
+    """Tap a random top-3 ORGANIC video result on the SERP.
+
+    Past failure mode: the picker accepted any clickable ViewGroup taller
+    than 10% of screen — including the Shorts shelf carousel, the channel
+    chip strip, and the first "Sponsored" ad. Tapping any of those does
+    not open Watch view, so `_watch_video` then idle-slept on the SERP.
+
+    Now:
+      - Wait for SERP render (`_wait_serp_ready`).
+      - Filter out `광고 / Sponsored / 広告 / 广告 / Quảng cáo` ad markers.
+      - Skip nodes whose res-id contains "shorts" or "reel" (Shorts shelf).
+      - Skip nodes above 10% height (filter chips / search bar).
+      - Require text/desc ≥ 20 chars (real video title, not button).
+      - Sort top-down, pick random of top-3.
+      - Fallback tap at (50%, 35%) if nothing matches.
+    """
+    _wait_serp_ready(adb, serial, log_cb=log_cb)
+
     xml = dump_ui(adb, serial)
     if not xml:
-        return False
-    candidates = []
-    for line in xml.splitlines():
-        pass
-    from .ui_state import iter_nodes
-    for node in iter_nodes(xml):
-        if "video" in (node.resource_id or "").lower() and node.clickable:
-            candidates.append(node)
-        elif node.class_name == "android.view.ViewGroup" and node.clickable and "video" in (node.desc or "").lower():
-            candidates.append(node)
-    if not candidates:
-        candidates = [
-            n for n in iter_nodes(xml)
-            if n.clickable and n.class_name in ("android.view.ViewGroup", "android.widget.FrameLayout")
-            and n.bounds[3] - n.bounds[1] > size.height * 0.1
-        ]
-    if not candidates:
-        _log(log_cb, "[YT] Không thấy kết quả tìm kiếm; fallback tap giữa")
-        tap(adb, serial, size.width // 2, int(size.height * 0.32))
+        _log(log_cb, "[YT] SERP dump rỗng, fallback tap giữa")
+        tap(adb, serial, size.width // 2, int(size.height * 0.35))
+        time.sleep(lognormal_sleep(0.8, 0.4, 1.0, 3.0))
         return True
+
+    from .ui_state import iter_nodes
+    candidates = []
+    for n in iter_nodes(xml):
+        if not n.clickable:
+            continue
+        rid = (n.resource_id or "").lower()
+        text = (n.text or "") + " " + (n.desc or "")
+        low = text.lower()
+
+        # Skip ads.
+        if any(bad in low for bad in YT_AD_LABELS):
+            continue
+        # Skip Shorts shelf and reel-related nodes.
+        if "shorts" in rid or "reel" in rid:
+            continue
+
+        x1, y1, x2, y2 = n.bounds
+        h = y2 - y1
+        # Above the SERP body (search bar / filter chips area).
+        if y1 < size.height * 0.10:
+            continue
+        # Strong: explicit video resource-id with title text.
+        if "video" in rid and len(text.strip()) >= 5:
+            candidates.append((n, 0))  # priority 0 (highest)
+            continue
+        # Weak: big clickable block with a meaningful title.
+        if n.class_name in ("android.view.ViewGroup", "android.widget.FrameLayout"):
+            if h > size.height * 0.12 and len(text.strip()) >= 20:
+                candidates.append((n, 1))
+
+    if not candidates:
+        # Heuristic fallback — tap first organic slot (~35% height keeps us
+        # under the Shorts shelf which usually sits at 15-30%).
+        y = int(size.height * 0.35)
+        x = size.width // 2
+        _log(log_cb, f"[YT] Không tìm thấy video kết quả, fallback tap @({x},{y})")
+        tap(adb, serial, x, y)
+        time.sleep(lognormal_sleep(0.8, 0.4, 1.0, 3.0))
+        return True
+
+    # Sort by (priority asc, y asc) — strongest first, then top-down.
+    candidates.sort(key=lambda t: (t[1], t[0].bounds[1]))
     pool = candidates[: min(3, len(candidates))]
-    pick = random.choice(pool)
+    pick, prio = random.choice(pool)
+    _log(
+        log_cb,
+        f"[YT] Mở video top-{pool.index((pick, prio))+1}/{len(pool)} "
+        f"(prio={prio}): {pick.text[:60]!r} @{pick.center}",
+    )
     tap(adb, serial, *pick.center)
-    _log(log_cb, f"[YT] Mở kết quả tại {pick.center}")
+    time.sleep(lognormal_sleep(0.9, 0.4, 1.5, 4.0))
     return True
+
+
+def _verify_in_watch(adb: ADB, serial: str, timeout: float = 5.0, log_cb=None) -> bool:
+    """After tapping a SERP result, confirm we entered the video Watch view.
+
+    If False, the caller should `back()` to leave the SERP cleanly and skip
+    the watch step (so we don't burn 60-300s of sleep on a non-playing page).
+    """
+    end = time.time() + timeout
+    while time.time() < end:
+        xml = dump_ui(adb, serial)
+        if xml and find_by_resource_id(xml, *PLAYER_RES_IDS):
+            return True
+        time.sleep(0.5)
+    return False
 
 
 def _watch_video(
@@ -653,6 +865,8 @@ def _watch_video(
         ensure_portrait(adb, serial, log_cb=log_cb)
         # And from ad-driven foreground hijack (Play Store / external app).
         ensure_app_foreground(adb, serial, YOUTUBE_PKG, log_cb=log_cb)
+        # Skip pre-roll / mid-roll YouTube ads when the Skip chip appears.
+        _skip_ad_if_present(adb, serial, size, log_cb)
 
         nap = min(end - time.time(), random.uniform(8.0, 20.0))
         if interruptible_sleep(stop_event, max(0.5, nap)):
@@ -681,6 +895,7 @@ def run_youtube_task(
     serial: str,
     keyword: str,
     *,
+    extra_keywords: Optional[list[str]] = None,
     reels_min: int = 5,
     reels_max: int = 10,
     delay_min: float = 10.0,
@@ -692,24 +907,41 @@ def run_youtube_task(
     stop_event: Optional[threading.Event] = None,
     log_cb: Optional[Callable[[str], None]] = None,
 ) -> bool:
-    """One YouTube cycle for `keyword`. Returns True if it ran end-to-end.
+    """One full YouTube CYCLE. Returns True if it ran end-to-end.
 
-    Flow:
-      1) Clean-launch YouTube (kills any stuck ad session from a prior run).
-      2) Enter Shorts; scroll `n = random[reels_min..reels_max]` reels,
-         each watched `random[delay_min..delay_max]` seconds, liked with
-         probability `like_rate`.
-      3) Leave Shorts, search keyword, watch a random top-3 result for
-         `random[watch_min_sec..watch_max_sec]` seconds.
+    Operator semantics (revised): a single "cycle" now means
+      1) Clean-launch YouTube.
+      2) Shorts session: scroll N reels with likes.
+      3) For EACH keyword in [keyword, *extra_keywords]:
+           - Back to Home tab.
+           - Search that keyword.
+           - Random click a top-3 organic video.
+           - Watch it for watch_min..watch_max seconds.
+      4) Return; the caller (`_run_one_task`) loops this cycle `loops`
+         times, each iteration restarting with a clean-launch.
+
+    Previously each keyword × loops was its own task, meaning loops=3
+    with 3 keywords produced 9 Shorts sessions; now it produces 3
+    Shorts sessions and 9 watches, which is what the operator wanted.
     """
     if _cancelled(stop_event):
+        return False
+
+    keywords = [keyword] + [k for k in (extra_keywords or []) if k]
+    if not keywords:
+        _log(log_cb, "[YT] Không có từ khoá nào, bỏ qua task")
         return False
 
     if not _open_youtube(adb, serial, log_cb):
         return False
     size = get_size(adb, serial)
-    _log(log_cb, f"[YT] Bắt đầu task keyword={keyword!r} size={size.width}x{size.height}")
+    _log(
+        log_cb,
+        f"[YT] Bắt đầu cycle | size={size.width}x{size.height} "
+        f"| keywords({len(keywords)})={keywords!r}",
+    )
 
+    # ----- Phase 1: Shorts -----
     if _go_to_shorts(adb, serial, size, log_cb):
         n_reels = random.randint(reels_min, reels_max)
         limit_note = (
@@ -739,25 +971,43 @@ def run_youtube_task(
         back(adb, serial)
         time.sleep(lognormal_sleep(0.5, 0.4, 0.5, 1.8))
 
-    if _cancelled(stop_event):
-        return True
+    # ----- Phase 2: search + watch for each keyword -----
+    for idx, kw in enumerate(keywords, start=1):
+        if _cancelled(stop_event):
+            return True
+        _log(log_cb, f"[YT] Từ khoá {idx}/{len(keywords)}: {kw!r}")
 
-    # Operator requirement: keyword search must originate from the Home tab,
-    # not from inside Shorts. Navigate explicitly so the SERP UI is the
-    # standard Watch-page layout, not a Shorts-embedded result list.
-    _go_to_home_tab(adb, serial, size, log_cb)
-    if _cancelled(stop_event):
-        return True
-    ensure_app_foreground(adb, serial, YOUTUBE_PKG, log_cb=log_cb)
+        _go_to_home_tab(adb, serial, size, log_cb)
+        if _cancelled(stop_event):
+            return True
+        ensure_app_foreground(adb, serial, YOUTUBE_PKG, log_cb=log_cb)
 
-    if not _do_search(adb, serial, size, keyword, log_cb):
-        return False
-    if _cancelled(stop_event):
-        return True
-    if not _tap_top_result(adb, serial, size, log_cb):
-        return False
-    time.sleep(lognormal_sleep(1.0, 0.5, 1.8, 4.5))
-    _watch_video(adb, serial, size, watch_min_sec, watch_max_sec, stop_event, log_cb)
+        if not _do_search(adb, serial, size, kw, log_cb):
+            _log(log_cb, f"[YT] Search {kw!r} fail — skip sang từ khoá kế")
+            continue
+        if _cancelled(stop_event):
+            return True
 
-    back(adb, serial)
+        if not _tap_top_result(adb, serial, size, log_cb):
+            _log(log_cb, f"[YT] Không tap được kết quả {kw!r} — back và skip")
+            back(adb, serial)
+            time.sleep(lognormal_sleep(0.4, 0.3, 0.4, 1.2))
+            continue
+
+        if not _verify_in_watch(adb, serial, log_cb=log_cb):
+            _log(log_cb, f"[YT] Tap kết quả {kw!r} không vào Watch — back và skip")
+            back(adb, serial)
+            time.sleep(lognormal_sleep(0.4, 0.3, 0.4, 1.2))
+            continue
+
+        time.sleep(lognormal_sleep(0.8, 0.4, 1.2, 3.5))
+        _watch_video(adb, serial, size, watch_min_sec, watch_max_sec, stop_event, log_cb)
+
+        # Clean exit from Watch view so the next keyword starts from a
+        # known place (Home tab nav handles it but a back here avoids
+        # leaving the player floating in minimised mode).
+        back(adb, serial)
+        time.sleep(lognormal_sleep(0.5, 0.4, 0.5, 1.8))
+
+    _log(log_cb, f"[YT] Cycle xong, đã quét {len(keywords)} từ khoá")
     return True

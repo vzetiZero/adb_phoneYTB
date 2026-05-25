@@ -152,25 +152,32 @@ Nếu preflight fail (ADB offline / chưa cài app) → trả `{"_skipped": 0}` 
 
 File: [adb_time_sync/youtube_flow.py:run_youtube_task](adb_time_sync/youtube_flow.py)
 
-Mỗi loop:
+**Loop semantics (revised)**: 1 task = 1 cycle, lặp `loops` lần. Mỗi cycle gồm 1 lần Shorts + lần lượt tất cả keywords. Ví dụ `loops=3` + 4 keyword → 3 Shorts sessions + 12 watches, không phải 12 Shorts sessions.
+
+Mỗi loop (= 1 cycle):
 1. `_open_youtube()` — **Clean launch**: `home` → `am force-stop com.google.android.youtube` → `am kill-all` → `monkey -p ... LAUNCHER` → verify foreground. Bước này bắt buộc vì BoxPhone hay khởi động vào session Shorts đang dính quảng cáo cũ; nếu không force-stop thì swipe-up sẽ tap vào nút "Visit" của ad thay vì cuộn sang reel kế tiếp.
 2. `_go_to_shorts()` — deep-link `vnd.youtube://shorts` → fallback bottom-nav theo content-desc (multi-locale: `Shorts`, `쇼츠`, `ショート`, `短视频`) → fallback blind tap ~30%×96% màn hình.
 3. `_scroll_reels(n_reels)` — vòng `n = random[reels_min..reels_max]`:
    - `ensure_portrait()` đầu mỗi reel (watchdog rotation).
    - `ensure_app_foreground(YOUTUBE_PKG)` — nếu Shorts ad đẩy sang Google Play/external app, back về YouTube hoặc force-stop hijacker rồi monkey relaunch.
-   - `_dismiss_overlay()` — nếu bottom sheet (mô tả/share/dialog) đang đè lên reel (detect qua `bottom_sheet_container` res-id hoặc title "설명"/"Description"/"공유"/"Share"...), bấm `back` để đóng. Tránh swipe-up tap vào nội dung sheet.
-   - `_ensure_in_shorts()` mỗi reel (resource-id `reel_player_page_container` hoặc nút Like/Comment) — nếu rớt khỏi Shorts thì vào lại tối đa 2 lần.
+   - `_skip_ad_if_present()` — phát hiện và tap "건너뛰기"/"Skip Ad" (res-id `skip_ad_button` → label multi-locale → fallback đóng X của app-install card khi không có Skip).
+   - `_dismiss_overlay()` — đóng bottom sheet "mô tả/share/menu more options" (detect res-id `bottom_sheet_container` HOẶC label như "설명", "재생목록에 저장", "관심 없음", "채널 추천 안함", "신고", "의견 보내기", "공유"... multi-locale, contains=True). Đóng bằng `back`.
+   - `_ensure_in_shorts()` mỗi reel — chống rớt Shorts.
    - Sleep `random[delay_min..delay_max]` (xem reel).
-   - Với xác suất `like_rate`: `_maybe_like()` — 4 tầng fallback:
-     1. resource-id `reel_like_button` / `like_button`
-     2. content-desc multi-locale (`좋아요`, `Like`, `Thích`...)
-     3. OpenCV template match với mọi PNG trong `like_templates/` (đa scale)
-     4. Double-tap giữa màn hình
+   - Với xác suất `like_rate`: `_maybe_like()` (4-tier fallback: res-id → label → OpenCV template → double-tap).
    - `swipe_up()` sang reel kế tiếp.
    - Nếu `shorts_time_limit_sec > 0` mà vượt → break sớm.
 4. `back()` thoát Shorts.
-5. **`_go_to_home_tab()`** — về Home tab YouTube (deep-link `vnd.youtube://feed/home` → fallback tap bottom-nav slot trái → fallback monkey LAUNCHER). Theo yêu cầu vận hành: search keyword phải xuất phát từ Home, không phải từ trong Shorts.
-6. `_do_search(keyword)` + `_tap_top_result()` + `_watch_video()` (mỗi nap có `ensure_portrait` + `ensure_app_foreground`).
+5. **Loop phase 2**: với mỗi keyword trong `[primary, *extra_keywords]`:
+   - `_go_to_home_tab()` — về Home tab YouTube (deep-link `vnd.youtube://feed/home` → fallback bottom-nav slot trái → fallback monkey LAUNCHER, verify qua `HOME_TAB_RES_IDS`).
+   - `ensure_app_foreground(YOUTUBE_PKG)`.
+   - `_do_search(keyword)` — deep-link `vnd.youtube:///results?search_query=...` (fallback UI).
+   - `_wait_serp_ready()` — poll dump_ui tới khi `SERP_RESULTS_RES_IDS` xuất hiện (timeout 6s).
+   - `_tap_top_result()` — lọc ads (`광고/스폰서/Sponsored/广告/広告/Quảng cáo`), bỏ Shorts shelf (res-id chứa "shorts"/"reel"), chỉ chọn node clickable có text ≥ 5 (cho video res-id) hoặc ≥ 20 (cho ViewGroup), sort top-down, random trong top-3.
+   - `_verify_in_watch()` — poll `PLAYER_RES_IDS` (player_view / watch_player / floaty_bar). Nếu không vào được Watch view trong 5s → back + skip keyword này.
+   - `_watch_video(watch_min..watch_max)` — mỗi nap có `ensure_portrait` + `ensure_app_foreground` + `_skip_ad_if_present`.
+   - `back()` thoát Watch view, sang keyword kế.
+6. Kết thúc cycle → return về `_run_one_task`. Iteration tiếp theo (nếu còn) clean-launch lại từ đầu.
 
 > **Comment đã bị gỡ bỏ** theo yêu cầu vận hành: tỉ lệ false-positive cao (gõ nhầm ô tìm kiếm) và rủi ro spam-ban YouTube. File `comments.txt` còn lưu nhưng không được nạp.
 5. `_do_search(keyword)`:

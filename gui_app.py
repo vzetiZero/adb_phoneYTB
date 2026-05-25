@@ -115,6 +115,18 @@ class MainWindow(QtWidgets.QMainWindow):
         self.btn_cancel.setEnabled(False)
         self.btn_cancel.clicked.connect(self._cancel)
         left.addWidget(self.btn_cancel)
+
+        # Home — manually return every selected device to Android home screen
+        # (force-stop YouTube + Chrome, then KEYCODE_HOME). Useful when an ad
+        # gets stuck or the operator wants to reset the floor without waiting
+        # for a workflow to finish.
+        self.btn_home = QtWidgets.QPushButton("🏠 Home (về màn hình chính)")
+        self.btn_home.setToolTip(
+            "Force-stop YouTube + Chrome trên các thiết bị đã chọn, rồi bấm Home.\n"
+            "Dùng để reset nhanh khi máy bị kẹt quảng cáo hoặc cần đưa về trạng thái sạch."
+        )
+        self.btn_home.clicked.connect(self._go_home_devices)
+        left.addWidget(self.btn_home)
         left.addStretch(1)
 
         # ---- Right column : workflow tabs + log ----
@@ -462,7 +474,13 @@ class MainWindow(QtWidgets.QMainWindow):
         ]
 
     def _build_youtube_tasks(self) -> list[Task] | None:
-        """Returns: list[Task] | [] (no keywords) | None (validation error)."""
+        """Returns: list[Task] | [] (no keywords) | None (validation error).
+
+        Semantics (revised): a single Task carries ALL keywords. The runner
+        executes ONE cycle (Shorts + per-keyword search/watch) per loop
+        iteration, so loops=3 with 4 keywords = 3 Shorts sessions + 12
+        watches (not 12 Shorts sessions like before).
+        """
         kws = self._read_keywords(self.yt_keywords)
         if not kws:
             return []
@@ -477,7 +495,8 @@ class MainWindow(QtWidgets.QMainWindow):
         d_max = reel_s * 1.15
         loops = int(self.yt_loops.value())
         shorts_limit_sec = int(self.yt_shorts_max_min.value()) * 60
-        opts_template = {
+        opts = {
+            "all_keywords": list(kws),
             "reels_min": int(self.yt_reels_min.value()),
             "reels_max": int(self.yt_reels_max.value()),
             "delay_min": d_min,
@@ -487,7 +506,8 @@ class MainWindow(QtWidgets.QMainWindow):
             "watch_min": float(self.yt_watch_min.value()),
             "watch_max": float(self.yt_watch_max.value()),
         }
-        return [Task(app="youtube", keyword=kw, loops=loops, opts=dict(opts_template)) for kw in kws]
+        # Single task; task.keyword is the primary (first) for stats display.
+        return [Task(app="youtube", keyword=kws[0], loops=loops, opts=opts)]
 
     def _build_chrome_tasks(self) -> list[Task] | None:
         lines = self._read_keywords(self.cr_keywords)
@@ -594,6 +614,34 @@ class MainWindow(QtWidgets.QMainWindow):
         self._stop_event.set()
         self.btn_cancel.setEnabled(False)
         self._log("[HỦY] Yêu cầu dừng — đợi loop hiện tại kết thúc...")
+
+    def _go_home_devices(self) -> None:
+        """Force-stop YT + Chrome then KEYCODE_HOME on every selected device.
+
+        Runs in a background thread so the GUI stays responsive — clearing
+        20 devices serially over ADB can take a few seconds. Allowed while
+        a workflow is running (the workflow's worker thread will resume on
+        whatever screen the device is on; this just gives a clean reset).
+        """
+        selected = self._selected_devices()
+        if not selected:
+            self._log("[HOME] Chưa chọn thiết bị")
+            return
+
+        def runner() -> None:
+            adb = ADB()
+            for serial in selected:
+                try:
+                    adb.shell(serial, "am force-stop com.google.android.youtube")
+                    adb.shell(serial, "am force-stop com.android.chrome")
+                    adb.shell(serial, "am kill-all")
+                    adb.shell(serial, "input keyevent KEYCODE_HOME")
+                    self._log(f"[HOME] {serial} → đã về Home")
+                except Exception as e:
+                    self._log(f"[HOME] {serial} LỖI: {e}")
+            self._log(f"[HOME] Xong, {len(selected)} thiết bị")
+
+        threading.Thread(target=runner, daemon=True).start()
 
 
 def main() -> int:

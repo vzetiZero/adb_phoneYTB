@@ -175,10 +175,27 @@ def _run_one_task(
             if task.app == "youtube":
                 d_min, d_max = _effective_watch(task, watch_seconds, "delay_min", "delay_max", 10.0, 15.0)
                 w_min, w_max = _effective_watch(task, watch_seconds, "watch_min", "watch_max", 60.0, 300.0)
+
+                # Resolve the keyword list for this cycle. Two sources:
+                #   GUI: opts["all_keywords"] is already a Python list
+                #        (primary = element 0).
+                #   CLI: opts["extra_keywords"] is a ";"-separated string
+                #        (primary = task.keyword, extras = the split).
+                all_kws = task.opts.get("all_keywords")
+                if isinstance(all_kws, list) and all_kws:
+                    extras = [str(k).strip() for k in all_kws[1:] if str(k).strip()]
+                else:
+                    extra_raw = task.opts.get("extra_keywords")
+                    if isinstance(extra_raw, str) and extra_raw.strip():
+                        extras = [k.strip() for k in extra_raw.split(";") if k.strip()]
+                    else:
+                        extras = []
+
                 ok = run_youtube_task(
                     adb,
                     serial,
                     task.keyword,
+                    extra_keywords=extras,
                     reels_min=int(task.opts.get("reels_min", 5)),
                     reels_max=int(task.opts.get("reels_max", 10)),
                     delay_min=d_min,
@@ -288,4 +305,13 @@ def run_tasks_on_device(
         results[str(task)] = n
         if log_cb:
             log_cb(f"[TASK] Xong {task} -> {n}/{task.loops}")
+        # Operator requirement: every program (YT / Chrome / mixed) ends at
+        # the Android home screen so the device is left in a known clean
+        # state for whatever the operator does next.
+        home(adb, serial)
+
+    # Final reset — also home after the whole batch (covers cancel-mid-loop).
+    home(adb, serial)
+    if log_cb:
+        log_cb("[TASK] Tất cả task kết thúc, đã về Home screen")
     return results

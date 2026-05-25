@@ -10,6 +10,9 @@
 #   delay_min, delay_max : số giây xem mỗi reel              (mặc định 10 / 15)
 #   like_rate            : xác suất like 1 reel  (0..1)       (mặc định 1.0 = mọi reel đều like)
 #   watch_min, watch_max : giây xem video sau khi search      (mặc định 60 / 300)
+#   extra_keywords       : từ khoá phụ, phân tách bằng ';' — search lần lượt trong cùng 1 cycle
+#                          (vd extra_keywords=Faker;LOL Worlds — 1 cycle search T1 vs DK,
+#                          rồi Faker, rồi LOL Worlds; loops=N tức lặp lại cả cycle N lần)
 # Lưu ý: comment đã bị tắt trong build hiện tại — opt comment_rate sẽ bị bỏ qua.
 #
 # === Tham số Chrome ===
