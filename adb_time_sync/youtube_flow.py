@@ -737,15 +737,109 @@ def _open_search(adb: ADB, serial: str, size: Size, log_cb=None) -> bool:
     return True
 
 
-def _do_search(adb: ADB, serial: str, size: Size, keyword: str, log_cb=None) -> bool:
-    # Preferred path: vnd.youtube deep-link straight to results, skip UI.
-    q = urllib.parse.quote_plus(keyword)
-    r = adb.shell(serial, f'am start -a android.intent.action.VIEW -d "vnd.youtube:///results?search_query={q}"')
-    if r.ok:
-        time.sleep(lognormal_sleep(1.0, 0.5, 1.5, 4.0))
-        return True
+# Server error / retry overlay markers (multi-locale). Substring match on
+# the raw XML dump is cheap and good enough — these strings don't appear
+# in normal Watch / SERP / Home dumps.
+YT_ERROR_MARKERS = (
+    "[400]", "[500]", "[503]",
+    "서버에 문제",        # KR: server problem
+    "Server error",
+    "Something went wrong",
+    "Có lỗi máy chủ",
+)
+# Retry button labels (multi-locale).
+YT_RETRY_LABELS = (
+    "다시 시도", "재시도",    # KR
+    "Try again", "Retry",
+    "Thử lại",
+    "再試行",                # JP
+    "重试",                  # CN
+)
 
-    _log(log_cb, "[YT] Deep-link search fail, fallback UI")
+
+def _has_yt_error_screen(xml: str) -> bool:
+    if not xml:
+        return False
+    low = xml.lower()
+    return any(m.lower() in low for m in YT_ERROR_MARKERS)
+
+
+def _tap_yt_retry(adb: ADB, serial: str, log_cb=None) -> bool:
+    """If the YT error screen is up, tap its '다시 시도' / 'Try again' button.
+
+    Returns True if we tapped a Retry control. The UI's retry chip is a
+    clickable TextView whose visible text is one of YT_RETRY_LABELS — no
+    stable resource-id, so we match by label.
+    """
+    xml = dump_ui(adb, serial)
+    if not _has_yt_error_screen(xml or ""):
+        return False
+    _log(log_cb, "[YT] Phát hiện màn hình lỗi YT (400/server) — tap Retry")
+    for label in YT_RETRY_LABELS:
+        node = find_by_text(xml, label, contains=True)
+        if node and node.clickable:
+            tap(adb, serial, *node.center)
+            time.sleep(lognormal_sleep(0.8, 0.4, 1.0, 2.5))
+            return True
+    # Fallback: label exists but the clickable parent isn't matched —
+    # tap the label centre anyway, Android will route to the parent.
+    for label in YT_RETRY_LABELS:
+        node = find_by_text(xml, label, contains=True)
+        if node:
+            tap(adb, serial, *node.center)
+            _log(log_cb, f"[YT] Tap Retry (label-only) {label!r} @{node.center}")
+            time.sleep(lognormal_sleep(0.8, 0.4, 1.0, 2.5))
+            return True
+    return False
+
+
+def _do_search(adb: ADB, serial: str, size: Size, keyword: str, log_cb=None) -> bool:
+    """Search for `keyword` on YouTube; verify the SERP actually rendered.
+
+    Why this is non-trivial: `am start ... -d <uri>` returns exit 0 as soon
+    as the intent is dispatched, EVEN IF YouTube then renders a [400]
+    server-error page. Operator screenshot showed exactly that — the
+    triple-slash form `vnd.youtube:///results?search_query=...` (empty
+    host, "/results" as path) is rejected with 400 on some Korean YT
+    builds. We now:
+
+      1) Try deep-link URIs in order of preference (correct form first,
+         legacy form last).
+      2) After each, give YT a beat then check for the [400] / 서버에 문제
+         error overlay. If present, tap Retry once; if still bad, move on.
+      3) Verify SERP via _wait_serp_ready (4s). Only return True when we
+         actually see the result list — never trust the am-start exit code.
+      4) On total deep-link failure, fall back to the UI search flow
+         (open search box → type keyword → submit).
+    """
+    q = urllib.parse.quote_plus(keyword)
+    deep_links = (
+        # Canonical YouTube deep-link form per official docs.
+        f"vnd.youtube://results?search_query={q}",
+        # https:// handoff — Android resolves to YouTube via intent filter.
+        f"https://www.youtube.com/results?search_query={q}",
+        # Legacy triple-slash form — kept for older YT builds that need it.
+        f"vnd.youtube:///results?search_query={q}",
+    )
+
+    for url in deep_links:
+        r = adb.shell(serial, f'am start -a android.intent.action.VIEW -d "{url}"')
+        if not r.ok:
+            continue
+        time.sleep(lognormal_sleep(0.8, 0.4, 1.0, 2.5))
+
+        # If YT slapped us with the 400/retry screen, tap Retry once.
+        if _tap_yt_retry(adb, serial, log_cb):
+            time.sleep(lognormal_sleep(0.8, 0.4, 1.0, 2.5))
+
+        # Verify SERP rendered. If not, try the next URL variant.
+        if _wait_serp_ready(adb, serial, timeout=4.0, log_cb=log_cb):
+            _log(log_cb, f"[YT] Search {keyword!r} ok qua {url}")
+            return True
+        _log(log_cb, f"[YT] {url} không cho SERP, thử URL kế")
+
+    # Fallback: UI flow.
+    _log(log_cb, "[YT] Mọi deep-link search fail — fallback UI search")
     _open_search(adb, serial, size, log_cb)
     xml = dump_ui(adb, serial)
     if xml:
@@ -758,7 +852,10 @@ def _do_search(adb: ADB, serial: str, size: Size, keyword: str, log_cb=None) -> 
     if not ok:
         return False
     time.sleep(lognormal_sleep(1.0, 0.5, 1.5, 4.0))
-    return True
+    # Last error check after UI submit.
+    if _tap_yt_retry(adb, serial, log_cb):
+        time.sleep(lognormal_sleep(0.8, 0.4, 1.0, 2.5))
+    return _wait_serp_ready(adb, serial, timeout=5.0, log_cb=log_cb)
 
 
 def _wait_serp_ready(
