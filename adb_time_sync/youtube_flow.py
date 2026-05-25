@@ -834,11 +834,41 @@ AD_RES_ID_FRAGMENTS = (
 )
 
 
+def _scroll_serp_past_ads(adb: ADB, serial: str, size: Size, log_cb=None) -> None:
+    """Small swipe-up to move SERP past the top ad block.
+
+    Operator-reported pattern: when search succeeds, the first 1-2 cards
+    are usually sponsored. The subtree-based ad filter in _tap_top_result
+    catches most, but adversarial layouts can still slip through. A pair
+    of short swipes shifts the viewport so the candidate list is sourced
+    from the organic results lower on the page — the ad block scrolls
+    off the top and is no longer a viable tap target either way.
+
+    Swipe distance ≈ 25% of screen height per stroke, 1-2 strokes
+    randomized to mimic human scanning. Far less than swipe_up() (50%)
+    which would skip a row of organic results.
+    """
+    n = random.randint(1, 2)
+    for _ in range(n):
+        swipe(
+            adb,
+            serial,
+            int(size.width * 0.5),
+            int(size.height * 0.65),
+            int(size.width * 0.5),
+            int(size.height * 0.40),
+            duration_ms=400,
+        )
+        time.sleep(lognormal_sleep(0.4, 0.3, 0.4, 1.0))
+    _log(log_cb, f"[YT] Cuộn SERP {n} lượt nhẹ để bỏ qua block quảng cáo đầu")
+
+
 def _tap_top_result(adb: ADB, serial: str, size: Size, log_cb=None) -> bool:
     """Tap a random top-3 ORGANIC video result on the SERP.
 
     Filter chain (each independently sufficient to skip a node):
       1) Wait up to 6s for SERP render.
+      1.5) Scroll past the top ad block (1-2 short swipes).
       2) Ad-marker text in own OR descendant nodes (subtree bounds check).
          Closes the "outer clickable is empty, '광고' badge is in a child
          TextView" gap that let sponsored results through before.
@@ -851,6 +881,7 @@ def _tap_top_result(adb: ADB, serial: str, size: Size, log_cb=None) -> bool:
          un-detected ad blocks.
     """
     _wait_serp_ready(adb, serial, log_cb=log_cb)
+    _scroll_serp_past_ads(adb, serial, size, log_cb)
 
     xml = dump_ui(adb, serial)
     if not xml:
@@ -976,12 +1007,29 @@ def _watch_video(
         ensure_portrait(adb, serial, log_cb=log_cb)
         # And from ad-driven foreground hijack (Play Store / external app).
         ensure_app_foreground(adb, serial, YOUTUBE_PKG, log_cb=log_cb)
+        # Close description / share / more-options bottom sheet if a stray
+        # tap opened one (operator screenshot: 설명 panel covering bottom
+        # half while a pre-roll ad plays at top).
+        _dismiss_overlay(adb, serial, size, log_cb)
         # Skip pre-roll / mid-roll YouTube ads when the Skip chip appears.
         _skip_ad_if_present(adb, serial, size, log_cb)
 
-        nap = min(end - time.time(), random.uniform(8.0, 20.0))
-        if interruptible_sleep(stop_event, max(0.5, nap)):
-            return
+        # Inner ad-watcher: instead of sleeping 8-20s straight (which can
+        # miss a 5-second skip window if it opens mid-nap), break the nap
+        # into 3-second chunks and re-check for the Skip chip between them.
+        # Human-action cadence (pause / scroll comments) is still per
+        # outer iteration so behaviour stays naturalistic.
+        nap_target = random.uniform(8.0, 20.0)
+        nap_end = min(end, time.time() + nap_target)
+        while time.time() < nap_end:
+            chunk = min(3.0, nap_end - time.time())
+            if interruptible_sleep(stop_event, max(0.5, chunk)):
+                return
+            # Cheap fast-path: only dump UI + tap when the player view
+            # likely has an ad showing. _skip_ad_if_present is a no-op when
+            # no Skip element exists, so calling it every 3s is safe.
+            _skip_ad_if_present(adb, serial, size, log_cb)
+
         # Occasional pause/resume — tap in the safe upper-half of the player.
         if random.random() < 0.25:
             tap(adb, serial, pause_x, pause_y)

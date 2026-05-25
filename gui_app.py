@@ -216,8 +216,11 @@ class MainWindow(QtWidgets.QMainWindow):
         watch_w = QtWidgets.QWidget()
         watch_h = QtWidgets.QHBoxLayout(watch_w)
         watch_h.setContentsMargins(0, 0, 0, 0)
-        self.yt_watch_min = QtWidgets.QSpinBox(); self.yt_watch_min.setRange(1, 7200); self.yt_watch_min.setValue(60); self.yt_watch_min.setSuffix(" s")
-        self.yt_watch_max = QtWidgets.QSpinBox(); self.yt_watch_max.setRange(1, 7200); self.yt_watch_max.setValue(300); self.yt_watch_max.setSuffix(" s")
+        # Default 30-60s — operator preference: short enough to cycle through
+        # multiple keywords quickly, long enough to register as a view.
+        # Independent of the Shorts "Xem mỗi reel" knob (no coupling).
+        self.yt_watch_min = QtWidgets.QSpinBox(); self.yt_watch_min.setRange(1, 7200); self.yt_watch_min.setValue(30); self.yt_watch_min.setSuffix(" s")
+        self.yt_watch_max = QtWidgets.QSpinBox(); self.yt_watch_max.setRange(1, 7200); self.yt_watch_max.setValue(60); self.yt_watch_max.setSuffix(" s")
         watch_h.addWidget(QtWidgets.QLabel("min")); watch_h.addWidget(self.yt_watch_min)
         watch_h.addWidget(QtWidgets.QLabel("max")); watch_h.addWidget(self.yt_watch_max)
         watch_h.addStretch(1)
