@@ -137,17 +137,6 @@ def load_tasks(path: str = "tasks.txt") -> list[Task]:
     return tasks
 
 
-def load_comments(path: str = "comments.txt") -> list[str]:
-    p = Path(path)
-    if not p.exists():
-        return []
-    return [
-        ln.strip()
-        for ln in p.read_text(encoding="utf-8").splitlines()
-        if ln.strip() and not ln.strip().startswith("#")
-    ]
-
-
 def _effective_watch(task: Task, watch_seconds: Optional[float], key_min: str, key_max: str,
                      default_min: float, default_max: float) -> tuple[float, float]:
     """Resolve watch-time range for a task.
@@ -171,7 +160,6 @@ def _run_one_task(
     adb: ADB,
     serial: str,
     task: Task,
-    comments_pool: list[str],
     stop_event: Optional[threading.Event],
     log_cb: Optional[Callable[[str], None]],
     watch_seconds: Optional[float] = None,
@@ -196,11 +184,9 @@ def _run_one_task(
                     delay_min=d_min,
                     delay_max=d_max,
                     like_rate=float(task.opts.get("like_rate", 1.0)),
-                    comment_rate=float(task.opts.get("comment_rate", 0.0)),
                     shorts_time_limit_sec=float(task.opts.get("shorts_time_limit", 0.0)),
                     watch_min_sec=w_min,
                     watch_max_sec=w_max,
-                    comments_pool=comments_pool,
                     stop_event=stop_event,
                     log_cb=log_cb,
                 )
@@ -239,7 +225,6 @@ def run_tasks_on_device(
     serial: str,
     tasks: list[Task],
     *,
-    comments_pool: Optional[list[str]] = None,
     stop_event: Optional[threading.Event] = None,
     log_cb: Optional[Callable[[str], None]] = None,
     watch_seconds: Optional[float] = None,
@@ -251,7 +236,6 @@ def run_tasks_on_device(
             and each search-result video, unless the task line overrides delay_*/watch_*.
     Returns {"<task_str>": successful_loops} for stats reporting.
     """
-    comments_pool = comments_pool or []
     results: dict = {}
 
     # ---- Preflight: bail early on bad devices instead of running ghost tasks.
@@ -300,7 +284,7 @@ def run_tasks_on_device(
         home(adb, serial)
         if interruptible_sleep(stop_event, lognormal_sleep(0.5, 0.4, 0.6, 2.0)):
             break
-        n = _run_one_task(adb, serial, task, comments_pool, stop_event, log_cb, watch_seconds)
+        n = _run_one_task(adb, serial, task, stop_event, log_cb, watch_seconds)
         results[str(task)] = n
         if log_cb:
             log_cb(f"[TASK] Xong {task} -> {n}/{task.loops}")

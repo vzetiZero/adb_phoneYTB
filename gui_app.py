@@ -136,8 +136,9 @@ class MainWindow(QtWidgets.QMainWindow):
         v = QtWidgets.QVBoxLayout(w)
 
         hint = QtWidgets.QLabel(
-            "<b>Workflow:</b> mở YouTube → lướt Shorts (N reel × Y giây/reel, like theo tỉ lệ) "
-            "→ search từ khoá → xem video ngẫu nhiên (W giây)."
+            "<b>Workflow:</b> về Home → force-stop YouTube → mở YouTube sạch → "
+            "lướt Shorts (N reel × Y giây/reel, like theo tỉ lệ) → "
+            "search từ khoá → xem video ngẫu nhiên (W giây). Comment đã bị tắt."
         )
         hint.setWordWrap(True)
         v.addWidget(hint)
@@ -179,10 +180,6 @@ class MainWindow(QtWidgets.QMainWindow):
         self.yt_like_rate = QtWidgets.QDoubleSpinBox()
         self.yt_like_rate.setRange(0.0, 1.0); self.yt_like_rate.setSingleStep(0.1); self.yt_like_rate.setValue(1.0)
         form.addRow("Tỉ lệ like (0-1)", self.yt_like_rate)
-
-        self.yt_comment_rate = QtWidgets.QDoubleSpinBox()
-        self.yt_comment_rate.setRange(0.0, 1.0); self.yt_comment_rate.setSingleStep(0.1); self.yt_comment_rate.setValue(0.0)
-        form.addRow("Tỉ lệ comment (0-1)", self.yt_comment_rate)
 
         # Video watch min/max
         watch_w = QtWidgets.QWidget()
@@ -486,7 +483,6 @@ class MainWindow(QtWidgets.QMainWindow):
             "delay_min": d_min,
             "delay_max": d_max,
             "like_rate": float(self.yt_like_rate.value()),
-            "comment_rate": float(self.yt_comment_rate.value()),
             "shorts_time_limit": float(shorts_limit_sec),
             "watch_min": float(self.yt_watch_min.value()),
             "watch_max": float(self.yt_watch_max.value()),

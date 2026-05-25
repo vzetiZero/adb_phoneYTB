@@ -153,9 +153,10 @@ Nếu preflight fail (ADB offline / chưa cài app) → trả `{"_skipped": 0}` 
 File: [adb_time_sync/youtube_flow.py:run_youtube_task](adb_time_sync/youtube_flow.py)
 
 Mỗi loop:
-1. `_open_youtube()` — `monkey -p com.google.android.youtube` + verify foreground.
+1. `_open_youtube()` — **Clean launch**: `home` → `am force-stop com.google.android.youtube` → `am kill-all` → `monkey -p ... LAUNCHER` → verify foreground. Bước này bắt buộc vì BoxPhone hay khởi động vào session Shorts đang dính quảng cáo cũ; nếu không force-stop thì swipe-up sẽ tap vào nút "Visit" của ad thay vì cuộn sang reel kế tiếp.
 2. `_go_to_shorts()` — deep-link `vnd.youtube://shorts` → fallback bottom-nav theo content-desc (multi-locale: `Shorts`, `쇼츠`, `ショート`, `短视频`) → fallback blind tap ~30%×96% màn hình.
 3. `_scroll_reels(n_reels)` — vòng `n = random[reels_min..reels_max]`:
+   - `ensure_portrait()` đầu mỗi reel (watchdog rotation).
    - `_ensure_in_shorts()` mỗi reel (resource-id `reel_player_page_container` hoặc nút Like/Comment) — nếu rớt khỏi Shorts thì vào lại tối đa 2 lần.
    - Sleep `random[delay_min..delay_max]` (xem reel).
    - Với xác suất `like_rate`: `_maybe_like()` — 4 tầng fallback:
@@ -163,10 +164,11 @@ Mỗi loop:
      2. content-desc multi-locale (`좋아요`, `Like`, `Thích`...)
      3. OpenCV template match với mọi PNG trong `like_templates/` (đa scale)
      4. Double-tap giữa màn hình
-   - Với xác suất `comment_rate` (và `comments_pool` không rỗng): `_post_comment()` chọn ngẫu nhiên 1 câu trong `comments.txt`, gõ qua `type_text()` (clipboard / ADBKeyboard / `input text`).
    - `swipe_up()` sang reel kế tiếp.
    - Nếu `shorts_time_limit_sec > 0` mà vượt → break sớm.
 4. `back()` thoát Shorts.
+
+> **Comment đã bị gỡ bỏ** theo yêu cầu vận hành: tỉ lệ false-positive cao (gõ nhầm ô tìm kiếm) và rủi ro spam-ban YouTube. File `comments.txt` còn lưu nhưng không được nạp.
 5. `_do_search(keyword)`:
    - Ưu tiên deep-link `vnd.youtube:///results?search_query=...`.
    - Fallback: `_open_search()` (intent SEARCH / tap nút search / tap góc trên-phải) → `type_text(keyword, submit=True)`.

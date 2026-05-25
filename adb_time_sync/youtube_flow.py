@@ -1,12 +1,19 @@
 """YouTube automation flow.
 
-Per task:
-  1. Open YouTube.
-  2. Enter Shorts; scroll 5-15 reels with watch durations 8-35s
-     (log-normal). On ~30% of reels: like + post a random comment.
-  3. Leave Shorts, search the keyword, watch a random top-3 video
-     for 1-5 minutes with pause/resume jitter.
+Per task (one full loop):
+  1. Clean launch — home → am force-stop YT → am kill-all → relaunch.
+     This is critical because BoxPhone often boots into a stuck
+     ad-on-Shorts session from a previous run; without force-stop the
+     scroll-up swipe lands on the ad's "Visit" button instead of the
+     next reel. Killing the process resets the ad cooldown / session.
+  2. Enter Shorts; scroll N reels with watch durations from the task's
+     delay_min..delay_max, liking with probability `like_rate`.
+  3. Leave Shorts, search the keyword, watch a random top-3 video for
+     watch_min..watch_max seconds with pause/resume jitter.
   4. Return so the caller can loop with the next keyword.
+
+Commenting was removed at the operator's request — interactions are
+limited to scroll + like + watch.
 """
 from __future__ import annotations
 
@@ -56,19 +63,6 @@ LIKE_RES_IDS = (
     "com.google.android.youtube:id/reel_like_button",
     "com.google.android.youtube:id/like_button",
 )
-COMMENT_RES_IDS = (
-    "com.google.android.youtube:id/reel_comment_button",
-    "com.google.android.youtube:id/comments_entry_point_simplebox",
-    "com.google.android.youtube:id/comments_entry_point_teaser_text",
-)
-COMMENT_INPUT_RES_IDS = (
-    "com.google.android.youtube:id/comment_editor_edit_text",
-    "com.google.android.youtube:id/comment_text",
-)
-COMMENT_SEND_RES_IDS = (
-    "com.google.android.youtube:id/comment_send_button",
-    "com.google.android.youtube:id/send_button",
-)
 SEARCH_BUTTON_RES_IDS = (
     "com.google.android.youtube:id/menu_search",
     "com.google.android.youtube:id/action_search",
@@ -116,10 +110,33 @@ def _log(log_cb: Optional[Callable[[str], None]], msg: str) -> None:
 
 
 def _open_youtube(adb: ADB, serial: str, log_cb=None) -> bool:
+    """Clean-launch YouTube.
+
+    The operator reported: when the project starts, the device is often
+    already in a stuck Shorts session showing an old ad — scroll-up taps
+    the ad's "Visit" link instead of the next reel and the whole loop
+    grinds. The fix is to never trust prior app state:
+
+       home → am force-stop com.google.android.youtube
+            → am kill-all (drops cached background processes)
+            → monkey LAUNCHER (fresh start, lands on Home tab)
+
+    This adds ~3s per loop but guarantees a deterministic starting screen.
+    """
     r = adb.shell(serial, f"pm list packages {YOUTUBE_PKG}")
     if not r.ok or YOUTUBE_PKG not in (r.out or ""):
         _log(log_cb, f"[YT] Chưa cài {YOUTUBE_PKG}")
         return False
+
+    _log(log_cb, "[YT] Clean launch — home → force-stop → kill-all → relaunch")
+    home(adb, serial)
+    time.sleep(0.4)
+    adb.shell(serial, f"am force-stop {YOUTUBE_PKG}")
+    # Sweep cached background apps too — frees memory and clears any
+    # webview / IME state that could resurrect a sticky ad overlay.
+    adb.shell(serial, "am kill-all")
+    time.sleep(lognormal_sleep(0.4, 0.3, 0.5, 1.5))
+
     adb.shell(serial, f"monkey -p {YOUTUBE_PKG} -c android.intent.category.LAUNCHER 1")
     time.sleep(lognormal_sleep(0.8, 0.4, 1.5, 5.0))
     return is_foreground(adb, serial, YOUTUBE_PKG)
@@ -362,70 +379,16 @@ def _maybe_like(adb: ADB, serial: str, size: Size, log_cb=None) -> bool:
     return True
 
 
-def _post_comment(
-    adb: ADB,
-    serial: str,
-    size: Size,
-    comments_pool: list[str],
-    log_cb=None,
-) -> bool:
-    if not comments_pool:
-        return False
-    xml = dump_ui(adb, serial)
-    if not xml:
-        return False
-    node = find_by_resource_id(xml, *COMMENT_RES_IDS)
-    if not node:
-        # Fallback below the like button.
-        x = int(size.width * 0.93)
-        y = int(size.height * (0.50 + random.uniform(-0.02, 0.02)))
-        tap(adb, serial, x, y)
-    else:
-        tap(adb, serial, *node.center)
-    time.sleep(lognormal_sleep(0.5, 0.4, 0.8, 2.5))
-
-    xml2 = dump_ui(adb, serial)
-    if xml2:
-        teaser = find_by_resource_id(xml2, "com.google.android.youtube:id/comments_entry_point_simplebox")
-        if teaser:
-            tap(adb, serial, *teaser.center)
-            time.sleep(lognormal_sleep(0.5, 0.4, 0.6, 2.0))
-
-    msg = random.choice(comments_pool)
-    ok, method = type_text(adb, serial, msg, submit=False)
-    _log(log_cb, f"[YT] Gõ comment ({method}): {msg!r} ok={ok}")
-    if not ok:
-        back(adb, serial)
-        return False
-    time.sleep(lognormal_sleep(0.5, 0.4, 0.5, 2.0))
-
-    xml3 = dump_ui(adb, serial)
-    send = None
-    if xml3:
-        send = find_by_resource_id(xml3, *COMMENT_SEND_RES_IDS)
-    if send:
-        tap(adb, serial, *send.center)
-    else:
-        x = int(size.width * 0.93)
-        y = int(size.height * 0.74)
-        tap(adb, serial, x, y)
-    time.sleep(lognormal_sleep(0.5, 0.4, 0.6, 2.0))
-    back(adb, serial)  # close comments panel
-    return True
-
-
 def _scroll_reels(
     adb: ADB,
     serial: str,
     size: Size,
     n_reels: int,
-    comments_pool: list[str],
     stop_event: Optional[threading.Event],
     *,
     delay_min: float,
     delay_max: float,
     like_rate: float,
-    comment_rate: float,
     shorts_time_limit_sec: float = 0.0,
     log_cb=None,
 ) -> None:
@@ -457,10 +420,6 @@ def _scroll_reels(
             _maybe_like(adb, serial, size, log_cb)
             time.sleep(lognormal_sleep(0.5, 0.4, 0.5, 1.8))
             # Like fallback may tap the wrong target on unknown ROMs — re-verify.
-            if not _ensure_in_shorts(adb, serial, size, log_cb):
-                return
-        if comment_rate > 0 and random.random() < comment_rate and comments_pool:
-            _post_comment(adb, serial, size, comments_pool, log_cb)
             if not _ensure_in_shorts(adb, serial, size, log_cb):
                 return
 
@@ -623,25 +582,22 @@ def run_youtube_task(
     delay_min: float = 10.0,
     delay_max: float = 15.0,
     like_rate: float = 1.0,
-    comment_rate: float = 0.0,
     shorts_time_limit_sec: float = 0.0,
     watch_min_sec: float = 60.0,
     watch_max_sec: float = 300.0,
-    comments_pool: Optional[list[str]] = None,
     stop_event: Optional[threading.Event] = None,
     log_cb: Optional[Callable[[str], None]] = None,
 ) -> bool:
     """One YouTube cycle for `keyword`. Returns True if it ran end-to-end.
 
     Flow:
-      1) Open YouTube, enter Shorts.
-      2) Scroll `n = random[reels_min..reels_max]` reels, each watched
-         `random[delay_min..delay_max]` seconds, liked with probability
-         `like_rate`, commented with probability `comment_rate`.
-      3) Leave Shorts, search keyword, watch top result for
+      1) Clean-launch YouTube (kills any stuck ad session from a prior run).
+      2) Enter Shorts; scroll `n = random[reels_min..reels_max]` reels,
+         each watched `random[delay_min..delay_max]` seconds, liked with
+         probability `like_rate`.
+      3) Leave Shorts, search keyword, watch a random top-3 result for
          `random[watch_min_sec..watch_max_sec]` seconds.
     """
-    comments_pool = comments_pool or []
     if _cancelled(stop_event):
         return False
 
@@ -660,19 +616,17 @@ def run_youtube_task(
         _log(
             log_cb,
             f"[YT] Sẽ lướt tối đa {n_reels} reel, delay {delay_min:.0f}-{delay_max:.0f}s, "
-            f"like_rate={like_rate}, comment_rate={comment_rate}{limit_note}",
+            f"like_rate={like_rate}{limit_note}",
         )
         _scroll_reels(
             adb,
             serial,
             size,
             n_reels,
-            comments_pool,
             stop_event,
             delay_min=delay_min,
             delay_max=delay_max,
             like_rate=like_rate,
-            comment_rate=comment_rate,
             shorts_time_limit_sec=shorts_time_limit_sec,
             log_cb=log_cb,
         )

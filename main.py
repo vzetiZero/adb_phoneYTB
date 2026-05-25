@@ -20,7 +20,6 @@ from adb_time_sync.adb import ADB
 from adb_time_sync.human import home, wait_for_foreground
 from adb_time_sync.task_runner import (
     Task,
-    load_comments,
     load_tasks,
     run_tasks_on_device,
 )
@@ -43,7 +42,6 @@ def _runner_for_device(
     adb: ADB,
     serial: str,
     tasks: list[Task],
-    comments_pool: list[str],
     stop_event: threading.Event,
     log_cb: Optional[Callable[[str], None]],
     label: str,
@@ -58,7 +56,6 @@ def _runner_for_device(
         adb,
         serial,
         tasks,
-        comments_pool=comments_pool,
         stop_event=stop_event,
         log_cb=child_log,
         watch_seconds=watch_seconds,
@@ -77,14 +74,12 @@ def run_tasks(
 ) -> dict[str, dict[str, int]]:
     """Run `tasks` on each serial in parallel; return {serial: {task_str: done}}."""
     stop_event = stop_event or threading.Event()
-    comments_pool = load_comments()
     aliases = _alias_map()
     workers = max(1, min(workers, len(serials) or 1))
 
     if log_cb:
         log_cb(
-            f"[RUN] devices={len(serials)} workers={workers} tasks={len(tasks)} "
-            f"comments_pool={len(comments_pool)}"
+            f"[RUN] devices={len(serials)} workers={workers} tasks={len(tasks)}"
         )
 
     results: dict[str, dict[str, int]] = {}
@@ -95,7 +90,6 @@ def run_tasks(
                 adb,
                 serial,
                 tasks,
-                comments_pool,
                 stop_event,
                 log_cb,
                 _device_alias(serial, aliases),
