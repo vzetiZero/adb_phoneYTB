@@ -125,6 +125,51 @@ async def get_status():
 
 
 # ---------------------------------------------------------------------------
+# Update check & apply
+# ---------------------------------------------------------------------------
+import subprocess as _sp
+
+def _git(*args):
+    return _sp.run(
+        ["git"] + list(args),
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+        cwd=str(PROJECT_ROOT), timeout=30,
+    )
+
+@app.get("/api/update/check")
+async def check_update():
+    """Check if there are new commits on remote."""
+    try:
+        _git("fetch", "origin")
+        local = _git("rev-parse", "HEAD").stdout.strip()
+        remote = _git("rev-parse", "origin/main").stdout.strip()
+        if local != remote:
+            ahead = _git("log", "--oneline", f"{local}..{remote}").stdout.strip().splitlines()
+            return {"has_update": True, "commits": len(ahead), "message": f"{len(ahead)} commit moi"}
+        return {"has_update": False, "commits": 0}
+    except Exception as e:
+        return {"has_update": False, "commits": 0, "error": str(e)}
+
+
+@app.post("/api/update/apply")
+async def apply_update():
+    """Git pull + rebuild UI."""
+    import threading
+
+    def _do_update():
+        try:
+            _git("pull", "origin", "main")
+            ui_dir = PROJECT_ROOT / "ui"
+            _sp.run(["npm", "install"], cwd=str(ui_dir), capture_output=True, timeout=120)
+            _sp.run(["npm", "run", "build"], cwd=str(ui_dir), capture_output=True, timeout=120)
+        except Exception:
+            pass
+
+    threading.Thread(target=_do_update, daemon=True).start()
+    return {"ok": True, "message": "Updating... app will refresh in 5 seconds"}
+
+
+# ---------------------------------------------------------------------------
 # Serve static frontend (Vite React SPA)
 # ---------------------------------------------------------------------------
 if DIST_DIR.is_dir():
