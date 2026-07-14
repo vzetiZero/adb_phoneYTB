@@ -87,7 +87,7 @@ export function TaskLogin({ devices, selected, isRunning, onLog, onStatusChange,
     try {
       await apiFetch("/api/tasks/home", {
         method: "POST",
-        body: JSON.stringify(Array.from(selected)),
+        body: JSON.stringify({ serials: Array.from(selected) }),
       })
       await new Promise((r) => setTimeout(r, 2000))
       onLog("[PRE-FLIGHT] Home done", "#10b981")

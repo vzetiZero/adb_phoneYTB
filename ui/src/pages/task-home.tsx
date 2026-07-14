@@ -20,7 +20,7 @@ export function TaskHome({ selected, isRunning, onLog, onStepChange }: TaskHomeP
     try {
       await apiFetch("/api/tasks/home", {
         method: "POST",
-        body: JSON.stringify(Array.from(selected)),
+        body: JSON.stringify({ serials: Array.from(selected) }),
       })
       onStepChange?.(1)
       await new Promise((r) => setTimeout(r, 500))
