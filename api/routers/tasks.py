@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException
+from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel
 
 import db
@@ -15,6 +16,43 @@ from adb_time_sync.adb import ADB
 from api.state import app_state, log_hub
 
 router = APIRouter()
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+SUCCESS_FILE = PROJECT_ROOT / "account_success.txt"
+ERROR_FILE = PROJECT_ROOT / "account_error.txt"
+
+
+def _write_login_results(results: dict, active_credentials: list, log) -> None:
+    """Separate success/failed results, save to DB and write to files."""
+    success_list = []
+    failed_list = []
+
+    for serial, email, pw in active_credentials:
+        r = results.get(serial, {})
+        if r.get("success"):
+            success_list.append((serial, email, pw))
+        else:
+            msg = r.get("message", "Unknown error")
+            failed_list.append((email, pw, msg))
+
+    # Write success file
+    if success_list:
+        lines = [f"{email}|{pw}" for _, email, pw in success_list]
+        SUCCESS_FILE.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        log(f"[FILE] Saved {len(success_list)} successful accounts to account_success.txt")
+    else:
+        SUCCESS_FILE.write_text("", encoding="utf-8")
+
+    # Write error file
+    if failed_list:
+        lines = [f"{email}|{pw}|{msg}" for email, pw, msg in failed_list]
+        ERROR_FILE.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        log(f"[FILE] Saved {len(failed_list)} failed accounts to account_error.txt")
+    else:
+        ERROR_FILE.write_text("", encoding="utf-8")
+
+    # Summary
+    log(f"[SUMMARY] Success: {len(success_list)} | Failed: {len(failed_list)} | Total: {len(active_credentials)}")
 
 
 def _load_config() -> dict:
@@ -153,6 +191,9 @@ async def start_google_login(body: GoogleLoginRequest):
                     adb, active_credentials, config, app_state.stop_event, log,
                     workers=body.workers,
                 )
+
+                # Collect success/failed and write to files
+                _write_login_results(results, active_credentials, log)
             else:
                 # Shared credentials for all selected devices
                 serials = [c.get("serial") for c in body.credentials if c.get("serial")]
@@ -298,3 +339,56 @@ async def google_logout(body: GoogleLogoutRequest):
     app_state.worker_thread.start()
 
     return {"ok": True, "message": "Logout workflow started"}
+
+
+# ---------------------------------------------------------------------------
+# Login result files
+# ---------------------------------------------------------------------------
+
+@router.get("/login-results")
+async def get_login_results():
+    """Return success and failed accounts from last login run."""
+    success = []
+    error = []
+
+    if SUCCESS_FILE.exists():
+        for line in SUCCESS_FILE.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            parts = line.split("|")
+            if len(parts) >= 2:
+                success.append({"email": parts[0], "password": parts[1]})
+
+    if ERROR_FILE.exists():
+        for line in ERROR_FILE.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            parts = line.split("|")
+            if len(parts) >= 2:
+                error.append({"email": parts[0], "password": parts[1], "error": parts[2] if len(parts) > 2 else ""})
+
+    return {"success": success, "error": error}
+
+
+@router.get("/export-success")
+async def export_success():
+    """Download account_success.txt"""
+    if not SUCCESS_FILE.exists():
+        return PlainTextResponse("", media_type="text/plain",
+                                headers={"Content-Disposition": "attachment; filename=account_success.txt"})
+    content = SUCCESS_FILE.read_text(encoding="utf-8")
+    return PlainTextResponse(content, media_type="text/plain",
+                            headers={"Content-Disposition": "attachment; filename=account_success.txt"})
+
+
+@router.get("/export-error")
+async def export_error():
+    """Download account_error.txt"""
+    if not ERROR_FILE.exists():
+        return PlainTextResponse("", media_type="text/plain",
+                                headers={"Content-Disposition": "attachment; filename=account_error.txt"})
+    content = ERROR_FILE.read_text(encoding="utf-8")
+    return PlainTextResponse(content, media_type="text/plain",
+                            headers={"Content-Disposition": "attachment; filename=account_error.txt"})

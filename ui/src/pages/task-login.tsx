@@ -1,9 +1,9 @@
-import { useState, useRef, useEffect } from "react"
+import { useState, useRef, useEffect, useCallback } from "react"
 import { Button } from "@/components/ui/button"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { apiFetch } from "@/lib/api"
-import { Play, Upload, Trash2, Cpu, Square } from "lucide-react"
+import { Play, Upload, Trash2, Cpu, Square, CheckCircle, XCircle, Download, FileText } from "lucide-react"
 
 const STORAGE_KEY = "boxphone_login_config"
 
@@ -27,6 +27,12 @@ function saveToStorage(data: SavedConfig) {
   } catch {}
 }
 
+interface LoginResult {
+  email: string
+  password: string
+  error?: string
+}
+
 interface TaskLoginProps {
   devices: { ip: string; name?: string; email?: string; password?: string }[]
   selected: Set<string>
@@ -41,12 +47,48 @@ export function TaskLogin({ devices, selected, isRunning, onLog, onStatusChange,
   const [emails, setEmails] = useState(saved.emails)
   const [passwords, setPasswords] = useState(saved.passwords)
   const [workers, setWorkers] = useState(saved.workers)
+  const [successResults, setSuccessResults] = useState<LoginResult[]>([])
+  const [errorResults, setErrorResults] = useState<LoginResult[]>([])
+  const [showResults, setShowResults] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const wasRunning = useRef(false)
 
   // Auto-save to localStorage when values change
   useEffect(() => {
     saveToStorage({ emails, passwords, workers })
   }, [emails, passwords, workers])
+
+  // Detect when workflow finishes → fetch results
+  useEffect(() => {
+    if (wasRunning.current && !isRunning) {
+      // Workflow just finished
+      fetchResults()
+    }
+    wasRunning.current = isRunning
+  }, [isRunning])
+
+  const fetchResults = async () => {
+    try {
+      const data = await apiFetch<{ success: LoginResult[]; error: LoginResult[] }>("/api/tasks/login-results")
+      setSuccessResults(data.success || [])
+      setErrorResults(data.error || [])
+      setShowResults(true)
+      if ((data.success || []).length > 0) {
+        onLog(`[RESULT] ${data.success.length} tai khoan login thanh cong`, "#10b981")
+      }
+      if ((data.error || []).length > 0) {
+        onLog(`[RESULT] ${data.error.length} tai khoan login that bai`, "#ef4444")
+      }
+    } catch {}
+  }
+
+  const handleExportSuccess = () => {
+    window.open("/api/tasks/export-success", "_blank")
+  }
+
+  const handleExportError = () => {
+    window.open("/api/tasks/export-error", "_blank")
+  }
 
   const handleFileImport = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
@@ -81,6 +123,10 @@ export function TaskLogin({ devices, selected, isRunning, onLog, onStatusChange,
       return
     }
 
+    setShowResults(false)
+    setSuccessResults([])
+    setErrorResults([])
+
     const emailLines = emails.split("\n").filter((l) => l.trim())
     const passLines = passwords.split("\n").filter((l) => l.trim())
     let credentials: { serial?: string; email: string; password: string }[] = []
@@ -90,7 +136,6 @@ export function TaskLogin({ devices, selected, isRunning, onLog, onStatusChange,
         onLog("[LOI] So dong email va password khong khop", "#ef4444")
         return
       }
-      // Gán 1-1: device[0] → email[0], device[1] → email[1], ...
       const deviceArr = Array.from(selected)
       for (let i = 0; i < deviceArr.length; i++) {
         if (i < emailLines.length) {
@@ -101,7 +146,6 @@ export function TaskLogin({ devices, selected, isRunning, onLog, onStatusChange,
           })
         }
       }
-      // Neu nhieu email hon device → bao loi
       if (emailLines.length > deviceArr.length) {
         onLog(`[WARN] Co ${emailLines.length} email nhau chi co ${deviceArr.length} device. Chi dung ${deviceArr.length} email dau.`, "#f59e0b")
       }
@@ -224,6 +268,62 @@ export function TaskLogin({ devices, selected, isRunning, onLog, onStatusChange,
           </Button>
         )}
       </div>
+
+      {/* Login Results */}
+      {showResults && (successResults.length > 0 || errorResults.length > 0) && (
+        <div className="border-t border-slate-200 pt-4 mt-4 space-y-3">
+          <h4 className="text-sm font-semibold text-slate-700">Ket qua Login</h4>
+
+          {/* Success */}
+          {successResults.length > 0 && (
+            <div className="bg-green-50 border border-green-200 rounded-lg p-3">
+              <div className="flex items-center justify-between mb-2">
+                <div className="flex items-center gap-2">
+                  <CheckCircle className="w-4 h-4 text-green-600" />
+                  <span className="text-sm font-medium text-green-800">
+                    Thanh cong: {successResults.length} tai khoan
+                  </span>
+                </div>
+                <Button variant="outline" size="sm" onClick={handleExportSuccess} className="h-7 text-xs">
+                  <Download className="mr-1 h-3 w-3" /> account_success.txt
+                </Button>
+              </div>
+              <div className="max-h-32 overflow-auto">
+                {successResults.map((r, i) => (
+                  <div key={i} className="text-xs text-green-700 font-mono py-0.5">
+                    {r.email}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Error */}
+          {errorResults.length > 0 && (
+            <div className="bg-red-50 border border-red-200 rounded-lg p-3">
+              <div className="flex items-center justify-between mb-2">
+                <div className="flex items-center gap-2">
+                  <XCircle className="w-4 h-4 text-red-600" />
+                  <span className="text-sm font-medium text-red-800">
+                    That bai: {errorResults.length} tai khoan
+                  </span>
+                </div>
+                <Button variant="outline" size="sm" onClick={handleExportError} className="h-7 text-xs">
+                  <Download className="mr-1 h-3 w-3" /> account_error.txt
+                </Button>
+              </div>
+              <div className="max-h-32 overflow-auto">
+                {errorResults.map((r, i) => (
+                  <div key={i} className="text-xs text-red-700 py-0.5">
+                    <span className="font-mono">{r.email}</span>
+                    {r.error && <span className="text-red-500 ml-2">— {r.error}</span>}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   )
 }

@@ -33,6 +33,8 @@ env/
 
 # --- Sensitive / machine-specific ---
 account.txt
+account_success.txt
+account_error.txt
 config.json
 screenshots/
 *.txt.txt
