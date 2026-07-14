@@ -90,10 +90,20 @@ export function TaskLogin({ devices, selected, isRunning, onLog, onStatusChange,
         onLog("[LOI] So dong email va password khong khop", "#ef4444")
         return
       }
-      for (const serial of selected) {
-        for (let i = 0; i < emailLines.length; i++) {
-          credentials.push({ serial, email: emailLines[i].trim(), password: passLines[i].trim() })
+      // Gán 1-1: device[0] → email[0], device[1] → email[1], ...
+      const deviceArr = Array.from(selected)
+      for (let i = 0; i < deviceArr.length; i++) {
+        if (i < emailLines.length) {
+          credentials.push({
+            serial: deviceArr[i],
+            email: emailLines[i].trim(),
+            password: passLines[i] ? passLines[i].trim() : "",
+          })
         }
+      }
+      // Neu nhieu email hon device → bao loi
+      if (emailLines.length > deviceArr.length) {
+        onLog(`[WARN] Co ${emailLines.length} email nhau chi co ${deviceArr.length} device. Chi dung ${deviceArr.length} email dau.`, "#f59e0b")
       }
     } else {
       for (const serial of selected) {
