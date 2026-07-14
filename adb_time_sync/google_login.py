@@ -666,8 +666,13 @@ class GoogleLoginAutomation:
             time.sleep(0.5)
         return False
 
-    def ensure_editable(self, field):
-        """Make sure we type into an EditText, not a matched label/error view."""
+    def ensure_editable(self, field, selector=None):
+        """Make sure we type into an EditText, not a matched label/error view.
+
+        If the matched element is not an EditText, re-find using the original
+        selector PLUS className=EditText so we get the *right* EditText — not
+        just any EditText on screen (which could be the wrong input field).
+        """
         try:
             class_name = field.info.get("className", "")
         except Exception:
@@ -676,9 +681,18 @@ class GoogleLoginAutomation:
         if "EditText" in class_name:
             return field
 
+        # Merge original selector with className to find the CORRECT EditText
+        if selector:
+            merged = {**selector, "className": "android.widget.EditText"}
+            edit = self.find_element(merged, timeout=2)
+            if edit:
+                self.logger.debug(f"Selector matched non-editable '{class_name}'; re-found EditText via merged selector")
+                return edit
+
+        # Last resort: any EditText (may pick wrong field)
         edit = self.device(className="android.widget.EditText")
         if edit.exists:
-            self.logger.debug(f"Selector matched non-editable '{class_name}'; using on-screen EditText")
+            self.logger.debug(f"Selector matched non-editable '{class_name}'; using any on-screen EditText (risky)")
             return edit
         return field
 
@@ -688,7 +702,7 @@ class GoogleLoginAutomation:
             if not field:
                 return False
 
-            field = self.ensure_editable(field)
+            field = self.ensure_editable(field, selector=selector)
             field.click()
             time.sleep(0.3)
             field.clear_text()

@@ -113,6 +113,15 @@ def run_google_login_flow(
         if not result.get("success"):
             if log_cb:
                 log_cb(f"[GOOGLE] Failed for {email}: {result.get('message')}")
+        elif not result.get("skipped"):
+            # Auto-save email/password to device after successful login
+            try:
+                import db
+                db.update_device_account(serial, email, password)
+                if log_cb:
+                    log_cb(f"[SAVE] {serial} -> {email} saved to device")
+            except Exception:
+                pass
     return results
 
 
@@ -141,6 +150,15 @@ def _login_single_device(
     if not result.get("success"):
         if log_cb:
             log_cb(f"[GOOGLE] Failed for {email} on {serial}: {result.get('message')}")
+    elif not result.get("skipped"):
+        # Auto-save email/password to device after successful login
+        try:
+            import db
+            db.update_device_account(serial, email, password)
+            if log_cb:
+                log_cb(f"[SAVE] {serial} -> {email} saved to device")
+        except Exception:
+            pass
     return serial, result
 
 
