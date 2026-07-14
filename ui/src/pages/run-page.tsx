@@ -5,7 +5,7 @@ import { Checkbox } from "@/components/ui/checkbox"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Badge } from "@/components/ui/badge"
 import { apiFetch, createLogSocket } from "@/lib/api"
-import { RefreshCw, Users, ListTodo } from "lucide-react"
+import { RefreshCw, Users, ListTodo, Trash2 } from "lucide-react"
 import { TaskList } from "./task-list"
 
 interface Device {
@@ -182,7 +182,14 @@ export default function RunPage() {
             <CardTitle className="flex items-center gap-2 text-sm text-slate-700">
               <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
               Log
-              <span className="text-[10px] text-slate-400 font-normal ml-auto">{logs.length}</span>
+              <span className="text-[10px] text-slate-400 font-normal">{logs.length}</span>
+              <button
+                onClick={() => setLogs([])}
+                className="ml-auto p-1 rounded hover:bg-slate-100 text-slate-400 hover:text-red-500 transition-colors"
+                title="Xoa log"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+              </button>
             </CardTitle>
           </CardHeader>
           <CardContent className="flex-1 min-h-0 p-3 pt-0">
