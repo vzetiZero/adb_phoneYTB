@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Optional
 
@@ -85,6 +86,7 @@ class HomeRequest(BaseModel):
 
 class GoogleLogoutRequest(BaseModel):
     serials: list[str]
+    workers: int = 4
 
 
 # ---------------------------------------------------------------------------
@@ -285,6 +287,39 @@ async def google_logout(body: GoogleLogoutRequest):
     app_state.stop_event.clear()
     app_state.is_running = True
 
+    def _logout_single_device(serial: str):
+        """Logout one device. Returns (serial, result_dict)."""
+        if app_state.stop_event.is_set():
+            return serial, {"removed": [], "failed": [], "message": "Cancelled"}
+        log(f"[LOGOUT] Processing {serial}...")
+        try:
+            automation = GoogleLoginAutomation(
+                serial=serial,
+                config=config,
+                logger=type("Logger", (), {
+                    "info": lambda self, msg: log(msg),
+                    "warning": lambda self, msg: log(f"[WARN] {msg}"),
+                    "debug": lambda self, msg: None,
+                    "error": lambda self, msg: log(f"[ERROR] {msg}"),
+                })(),
+                stop_event=app_state.stop_event,
+            )
+            result = automation.logout_all_google_accounts()
+            removed = result.get("removed", [])
+            failed = result.get("failed", [])
+            if removed:
+                log(f"[LOGOUT] {serial}: Removed {len(removed)} accounts: {', '.join(removed)}")
+                db.update_device_account(serial, None, None)
+                log(f"[LOGOUT] {serial}: Cleared account from Devices tab")
+            if failed:
+                log(f"[LOGOUT] {serial}: Failed {len(failed)} accounts")
+            if not removed and not failed:
+                log(f"[LOGOUT] {serial}: {result.get('message')}")
+            return serial, result
+        except Exception as e:
+            log(f"[LOGOUT] {serial} ERROR: {e}")
+            return serial, {"removed": [], "failed": [], "message": str(e)}
+
     def runner():
         try:
             adb = ADB(adb_path=adb_path)
@@ -297,40 +332,16 @@ async def google_logout(body: GoogleLogoutRequest):
                     if ip and ("." in ip or ":" in ip):
                         adb.cmd("connect", ip)
 
-            log(f"[LOGOUT] Starting ALL Google account removal on {len(body.serials)} devices")
+            log(f"[LOGOUT] Starting ALL Google account removal on {len(body.serials)} devices (workers={body.workers})")
 
-            for serial in body.serials:
-                if app_state.stop_event.is_set():
-                    log("[LOGOUT] Cancelled by user")
-                    break
-
-                log(f"[LOGOUT] Processing {serial}...")
-                try:
-                    automation = GoogleLoginAutomation(
-                        serial=serial,
-                        config=config,
-                        logger=type("Logger", (), {
-                            "info": lambda self, msg: log(msg),
-                            "warning": lambda self, msg: log(f"[WARN] {msg}"),
-                            "debug": lambda self, msg: None,
-                            "error": lambda self, msg: log(f"[ERROR] {msg}"),
-                        })(),
-                        stop_event=app_state.stop_event,
-                    )
-                    result = automation.logout_all_google_accounts()
-                    removed = result.get("removed", [])
-                    failed = result.get("failed", [])
-                    if removed:
-                        log(f"[LOGOUT] {serial}: Removed {len(removed)} accounts: {', '.join(removed)}")
-                        # Clear email/password from device in DB
-                        db.update_device_account(serial, None, None)
-                        log(f"[LOGOUT] {serial}: Cleared account from Devices tab")
-                    if failed:
-                        log(f"[LOGOUT] {serial}: Failed {len(failed)} accounts")
-                    if not removed and not failed:
-                        log(f"[LOGOUT] {serial}: {result.get('message')}")
-                except Exception as e:
-                    log(f"[LOGOUT] {serial} ERROR: {e}")
+            max_workers = min(max(1, body.workers), len(body.serials))
+            with ThreadPoolExecutor(max_workers=max_workers) as ex:
+                futs = {ex.submit(_logout_single_device, s): s for s in body.serials}
+                for fut in as_completed(futs):
+                    if app_state.stop_event.is_set():
+                        log("[LOGOUT] Cancelled by user")
+                        break
+                    fut.result()
 
             log("[LOGOUT] All done")
         except Exception as e:

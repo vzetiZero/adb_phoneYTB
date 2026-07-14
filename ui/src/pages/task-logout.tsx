@@ -1,6 +1,10 @@
+import { useState, useEffect } from "react"
 import { Button } from "@/components/ui/button"
+import { Label } from "@/components/ui/label"
 import { apiFetch } from "@/lib/api"
 import { Play, LogOut, AlertTriangle, Square } from "lucide-react"
+
+const STORAGE_KEY = "boxphone_logout_config"
 
 interface TaskLogoutProps {
   devices: { ip: string; name?: string; email?: string; password?: string }[]
@@ -12,6 +16,18 @@ interface TaskLogoutProps {
 }
 
 export function TaskLogout({ devices, selected, isRunning, onLog, onStatusChange, onStepChange }: TaskLogoutProps) {
+  const [workers, setWorkers] = useState(() => {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY)
+      if (raw) return JSON.parse(raw).workers || 4
+    } catch {}
+    return 4
+  })
+
+  useEffect(() => {
+    try { localStorage.setItem(STORAGE_KEY, JSON.stringify({ workers })) } catch {}
+  }, [workers])
+
   const handleStart = async () => {
     if (selected.size === 0) {
       onLog("[LOI] Chua chon thiet bi", "#ef4444")
@@ -37,10 +53,10 @@ export function TaskLogout({ devices, selected, isRunning, onLog, onStatusChange
     try {
       await apiFetch("/api/tasks/google-logout", {
         method: "POST",
-        body: JSON.stringify({ serials: Array.from(selected) }),
+        body: JSON.stringify({ serials: Array.from(selected), workers }),
       })
       onStatusChange(true)
-      onLog("[START] Google Logout - Xoa TAT CA tai khoan Google", "#3b82f6")
+      onLog(`[START] Google Logout - ${selected.size} devices, ${workers} workers`, "#3b82f6")
     } catch (e: any) {
       onLog(`[LOI] ${e?.message || String(e)}`, "#ef4444")
     }
@@ -84,6 +100,18 @@ export function TaskLogout({ devices, selected, isRunning, onLog, onStatusChange
           <li>Xoa tung tai khoan mot</li>
           <li>Xac nhan da xoa thanh cong</li>
         </ul>
+      </div>
+
+      <div>
+        <Label className="text-slate-600">Workers (song song)</Label>
+        <input
+          type="number"
+          min={1}
+          max={50}
+          value={workers}
+          onChange={(e) => setWorkers(Number(e.target.value) || 4)}
+          className="mt-1 w-20 h-8 rounded-md border border-slate-200 bg-slate-50 px-2 text-sm"
+        />
       </div>
 
       <div className="flex justify-end gap-2 pt-2">
