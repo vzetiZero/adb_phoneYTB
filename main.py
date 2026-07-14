@@ -116,34 +116,53 @@ def run_google_login_flow(
     return results
 
 
+def _login_single_device(
+    adb: ADB,
+    serial: str,
+    email: str,
+    password: str,
+    config: dict,
+    stop_event: Optional[threading.Event] = None,
+    log_cb: Optional[Callable[[str], None]] = None,
+) -> tuple[str, dict]:
+    """Login one device. Returns (serial, result_dict)."""
+    if stop_event and stop_event.is_set():
+        return serial, {"success": False, "message": "Cancelled"}
+    if log_cb:
+        log_cb(f"[GOOGLE] Starting login for {email} on {serial}")
+    automation = GoogleLoginAutomation(serial=serial, config=config, logger=type("Logger", (), {"info": lambda self, msg: (log_cb and log_cb(msg)), "warning": lambda self, msg: (log_cb and log_cb(f"[WARN] {msg}")), "debug": lambda self, msg: None, "error": lambda self, msg: (log_cb and log_cb(f"[ERROR] {msg}"))})(), stop_event=stop_event)
+
+    if automation.account_exists_on_device(email):
+        if log_cb:
+            log_cb(f"[DA DANG NHAP] Phone {serial} da dang nhap {email} -> Bo qua")
+        return serial, {"success": True, "message": "Already logged in", "skipped": True}
+
+    result = automation.login_google_account(email, password)
+    if not result.get("success"):
+        if log_cb:
+            log_cb(f"[GOOGLE] Failed for {email} on {serial}: {result.get('message')}")
+    return serial, result
+
+
 def run_google_login_per_device(
     adb: ADB,
     credentials: list[tuple[str, str, str]],
     config: dict,
     stop_event: Optional[threading.Event] = None,
     log_cb: Optional[Callable[[str], None]] = None,
+    workers: int = 4,
 ) -> dict[str, dict]:
-    """Run Google login with per-device credentials: [(serial, email, password), ...]"""
+    """Run Google login with per-device credentials in parallel."""
     results: dict[str, dict] = {}
-    for serial, email, password in credentials:
-        if stop_event and stop_event.is_set():
-            break
-        if log_cb:
-            log_cb(f"[GOOGLE] Starting login for {email} on {serial}")
-        automation = GoogleLoginAutomation(serial=serial, config=config, logger=type("Logger", (), {"info": lambda self, msg: (log_cb and log_cb(msg)), "warning": lambda self, msg: (log_cb and log_cb(f"[WARN] {msg}")), "debug": lambda self, msg: None, "error": lambda self, msg: (log_cb and log_cb(f"[ERROR] {msg}"))})(), stop_event=stop_event)
-
-        # Skip if account already exists on device
-        if automation.account_exists_on_device(email):
-            if log_cb:
-                log_cb(f"[DA DANG NHAP] Phone {serial} da dang nhap {email} -> Bo qua, khong chay nua")
-            results[serial] = {"success": True, "message": "Already logged in", "skipped": True}
-            continue
-
-        result = automation.login_google_account(email, password)
-        results[serial] = result
-        if not result.get("success"):
-            if log_cb:
-                log_cb(f"[GOOGLE] Failed for {email} on {serial}: {result.get('message')}")
+    max_workers = min(max(1, workers), len(credentials) or 1)
+    with ThreadPoolExecutor(max_workers=max_workers) as ex:
+        futs = {
+            ex.submit(_login_single_device, adb, s, e, p, config, stop_event, log_cb): s
+            for s, e, p in credentials
+        }
+        for fut in as_completed(futs):
+            serial, result = fut.result()
+            results[serial] = result
     return results
 
 

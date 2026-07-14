@@ -7,7 +7,12 @@ export async function apiFetch<T>(path: string, options?: RequestInit): Promise<
   })
   if (!res.ok) {
     const body = await res.json().catch(() => ({}))
-    throw new Error(body.detail || `HTTP ${res.status}`)
+    const detail = typeof body.detail === "string"
+      ? body.detail
+      : typeof body.detail === "object"
+        ? JSON.stringify(body.detail)
+        : `HTTP ${res.status}`
+    throw new Error(detail)
   }
   return res.json()
 }

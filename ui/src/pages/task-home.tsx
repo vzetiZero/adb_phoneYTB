@@ -1,15 +1,16 @@
 import { Button } from "@/components/ui/button"
 import { apiFetch } from "@/lib/api"
-import { Play, Home } from "lucide-react"
+import { Play, Home, Square } from "lucide-react"
 
 interface TaskHomeProps {
   selected: Set<string>
   isRunning: boolean
   onLog: (msg: string, color?: string) => void
+  onStatusChange: (running: boolean) => void
   onStepChange?: (step: number) => void
 }
 
-export function TaskHome({ selected, isRunning, onLog, onStepChange }: TaskHomeProps) {
+export function TaskHome({ selected, isRunning, onLog, onStatusChange, onStepChange }: TaskHomeProps) {
   const handleStart = async () => {
     if (selected.size === 0) {
       onLog("[LOI] Chua chon thiet bi", "#ef4444")
@@ -18,16 +19,36 @@ export function TaskHome({ selected, isRunning, onLog, onStepChange }: TaskHomeP
 
     onStepChange?.(0)
     try {
-      await apiFetch("/api/tasks/home", {
+      const res = await apiFetch<{ results: { serial: string; ok: boolean; error?: string }[] }>("/api/tasks/home", {
         method: "POST",
         body: JSON.stringify({ serials: Array.from(selected) }),
       })
       onStepChange?.(1)
       await new Promise((r) => setTimeout(r, 500))
       onStepChange?.(2)
-      onLog(`[HOME] Da ve Home tren ${selected.size} thiet bi`, "#10b981")
+
+      const failed = res.results?.filter((r) => !r.ok) || []
+      const success = res.results?.filter((r) => r.ok) || []
+
+      if (success.length > 0) {
+        onLog(`[HOME] Da ve Home tren ${success.length} thiet bi`, "#10b981")
+      }
+      for (const f of failed) {
+        onLog(`[HOME] ${f.serial} LOI: ${f.error || "khong xac dinh"}`, "#ef4444")
+      }
     } catch (e: any) {
-      onLog(`[LOI] ${e.message}`, "#ef4444")
+      const msg = e?.message || String(e)
+      onLog(`[LOI] ${msg}`, "#ef4444")
+    }
+  }
+
+  const handleCancel = async () => {
+    try {
+      await apiFetch("/api/tasks/cancel", { method: "POST" })
+      onLog("[HUY] Da huy workflow", "#f59e0b")
+      onStatusChange(false)
+    } catch (e: any) {
+      onLog(`[LOI] Khong the huy: ${e?.message || String(e)}`, "#ef4444")
     }
   }
 
@@ -52,16 +73,22 @@ export function TaskHome({ selected, isRunning, onLog, onStepChange }: TaskHomeP
         </ul>
       </div>
 
-      <div className="flex justify-end pt-2">
-        <Button
-          size="sm"
-          variant="outline"
-          onClick={handleStart}
-          disabled={isRunning || selected.size === 0}
-          className="border-emerald-200 text-emerald-600 hover:bg-emerald-50"
-        >
-          <Play className="mr-1 h-3 w-3" /> Bat dau
-        </Button>
+      <div className="flex justify-end gap-2 pt-2">
+        {isRunning ? (
+          <Button size="sm" variant="destructive" onClick={handleCancel}>
+            <Square className="mr-1 h-3 w-3" /> Huy
+          </Button>
+        ) : (
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={handleStart}
+            disabled={selected.size === 0}
+            className="border-emerald-200 text-emerald-600 hover:bg-emerald-50"
+          >
+            <Play className="mr-1 h-3 w-3" /> Bat dau
+          </Button>
+        )}
       </div>
     </div>
   )

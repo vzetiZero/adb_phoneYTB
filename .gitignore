@@ -38,6 +38,7 @@ screenshots/
 *.txt.txt
 5.0.0
 a.txt
+error.txt
 
 # --- Node ---
 ui/node_modules/

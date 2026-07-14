@@ -147,9 +147,10 @@ async def start_google_login(body: GoogleLoginRequest):
                     log("[OK] Khong co thiet bi nao can chay login (tat ca da dang nhap).")
                     return
 
-                log(f"[API] Running login on {len(active_credentials)} devices")
+                log(f"[API] Running login on {len(active_credentials)} devices (workers={body.workers})")
                 results = core.run_google_login_per_device(
-                    adb, active_credentials, config, app_state.stop_event, log
+                    adb, active_credentials, config, app_state.stop_event, log,
+                    workers=body.workers,
                 )
             else:
                 # Shared credentials for all selected devices

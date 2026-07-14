@@ -1,6 +1,6 @@
 import { Button } from "@/components/ui/button"
 import { apiFetch } from "@/lib/api"
-import { Play, LogOut, AlertTriangle } from "lucide-react"
+import { Play, LogOut, AlertTriangle, Square } from "lucide-react"
 
 interface TaskLogoutProps {
   devices: { ip: string; name?: string; email?: string; password?: string }[]
@@ -29,7 +29,7 @@ export function TaskLogout({ devices, selected, isRunning, onLog, onStatusChange
       await new Promise((r) => setTimeout(r, 2000))
       onLog("[PRE-FLIGHT] Home done", "#10b981")
     } catch (e: any) {
-      onLog(`[PRE-FLIGHT] Loi: ${e.message}`, "#ef4444")
+      onLog(`[PRE-FLIGHT] Loi: ${e?.message || String(e)}`, "#ef4444")
     }
 
     // Start logout all accounts
@@ -42,7 +42,17 @@ export function TaskLogout({ devices, selected, isRunning, onLog, onStatusChange
       onStatusChange(true)
       onLog("[START] Google Logout - Xoa TAT CA tai khoan Google", "#3b82f6")
     } catch (e: any) {
-      onLog(`[LOI] ${e.message}`, "#ef4444")
+      onLog(`[LOI] ${e?.message || String(e)}`, "#ef4444")
+    }
+  }
+
+  const handleCancel = async () => {
+    try {
+      await apiFetch("/api/tasks/cancel", { method: "POST" })
+      onLog("[HUY] Da huy workflow", "#f59e0b")
+      onStatusChange(false)
+    } catch (e: any) {
+      onLog(`[LOI] Khong the huy: ${e?.message || String(e)}`, "#ef4444")
     }
   }
 
@@ -75,15 +85,21 @@ export function TaskLogout({ devices, selected, isRunning, onLog, onStatusChange
         </ul>
       </div>
 
-      <div className="flex justify-end pt-2">
-        <Button
-          size="sm"
-          onClick={handleStart}
-          disabled={isRunning || selected.size === 0}
-          className="bg-orange-500 hover:bg-orange-600"
-        >
-          <Play className="mr-1 h-3 w-3" /> Xoa tat ca tai khoan
-        </Button>
+      <div className="flex justify-end gap-2 pt-2">
+        {isRunning ? (
+          <Button size="sm" variant="destructive" onClick={handleCancel}>
+            <Square className="mr-1 h-3 w-3" /> Huy
+          </Button>
+        ) : (
+          <Button
+            size="sm"
+            onClick={handleStart}
+            disabled={selected.size === 0}
+            className="bg-orange-500 hover:bg-orange-600"
+          >
+            <Play className="mr-1 h-3 w-3" /> Xoa tat ca tai khoan
+          </Button>
+        )}
       </div>
     </div>
   )

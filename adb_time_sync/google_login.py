@@ -259,12 +259,12 @@ class GoogleLoginAutomation:
 
         try:
             self.device.app_start("com.android.vending")
-            time.sleep(2)
+            time.sleep(3)
             self.device.app_start("com.google.android.gms", ".auth.DefaultAuthDelegateService")
-            time.sleep(1)
+            time.sleep(2)
             # GMS auth may override rotation — re-apply portrait lock
             self._force_portrait()
-            time.sleep(1)
+            time.sleep(2)
         except Exception as e:
             self.logger.debug(f"Play Store launch failed: {e}")
 
@@ -744,20 +744,26 @@ class GoogleLoginAutomation:
         login_entry_texts = self._collect_texts(login_config, "login_entry_texts", ["Sign in", "Log in", "LOGIN", "로그인", "Login"])
         self.logger.info(f"Looking for login entry button: {', '.join(login_entry_texts)}")
 
-        for attempt in range(3):
-            if self.click_first_text(login_entry_texts, timeout=2):
+        for attempt in range(5):
+            if self.click_first_text(login_entry_texts, timeout=3):
                 time.sleep(2)
                 return
 
-            if self._click_configured_texts(login_config, "sign_in_texts", sign_in_texts + ["로그인", "Login"], timeout=2):
+            if self._click_configured_texts(login_config, "sign_in_texts", sign_in_texts + ["로그인", "Login", "Sign in"], timeout=3):
                 time.sleep(2)
                 return
 
-            if attempt < 2:
+            # Try swiping to reveal login button
+            if attempt >= 2:
+                self.logger.info(f"Trying swipe to find login button on attempt {attempt + 1}")
+                self._swipe_up()
+                time.sleep(1)
+
+            if attempt < 4:
                 self.logger.info(f"Login entry not found on attempt {attempt + 1}; retrying after a short pause")
-                time.sleep(1.5)
+                time.sleep(2)
 
-        self.logger.info("Login entry not found after retries; will re-enter the flow on the next pass")
+        self.logger.warning("Login entry not found after retries; will re-enter the flow on the next pass")
 
     def enter_email_if_needed(self, email: str, login_config: Dict, timeout: int) -> bool:
         username_field = login_config.get("username_field", {})

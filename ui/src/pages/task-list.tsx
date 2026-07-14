@@ -113,6 +113,7 @@ export function TaskList({ devices, selected, isRunning, onLog, onStatusChange }
             selected={selected}
             isRunning={isRunning}
             onLog={onLog}
+            onStatusChange={onStatusChange}
             onStepChange={setCurrentStep}
           />
         )

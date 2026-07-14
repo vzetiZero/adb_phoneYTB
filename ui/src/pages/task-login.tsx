@@ -4,7 +4,7 @@ import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { Badge } from "@/components/ui/badge"
 import { apiFetch } from "@/lib/api"
-import { Play, Upload, Trash2, Cpu } from "lucide-react"
+import { Play, Upload, Trash2, Cpu, Square } from "lucide-react"
 
 interface TaskLoginProps {
   devices: { ip: string; name?: string; email?: string; password?: string }[]
@@ -92,7 +92,7 @@ export function TaskLogin({ devices, selected, isRunning, onLog, onStatusChange,
       await new Promise((r) => setTimeout(r, 2000))
       onLog("[PRE-FLIGHT] Home done", "#10b981")
     } catch (e: any) {
-      onLog(`[PRE-FLIGHT] Loi: ${e.message}`, "#ef4444")
+      onLog(`[PRE-FLIGHT] Loi: ${e?.message || String(e)}`, "#ef4444")
     }
 
     // Start login
@@ -105,7 +105,17 @@ export function TaskLogin({ devices, selected, isRunning, onLog, onStatusChange,
       onStatusChange(true)
       onLog("[START] Google Login bat dau", "#3b82f6")
     } catch (e: any) {
-      onLog(`[LOI] ${e.message}`, "#ef4444")
+      onLog(`[LOI] ${e?.message || String(e)}`, "#ef4444")
+    }
+  }
+
+  const handleCancel = async () => {
+    try {
+      await apiFetch("/api/tasks/cancel", { method: "POST" })
+      onLog("[HUY] Da huy workflow", "#f59e0b")
+      onStatusChange(false)
+    } catch (e: any) {
+      onLog(`[LOI] Khong the huy: ${e?.message || String(e)}`, "#ef4444")
     }
   }
 
@@ -164,9 +174,15 @@ export function TaskLogin({ devices, selected, isRunning, onLog, onStatusChange,
         <Button variant="outline" size="sm" onClick={() => { setEmails(""); setPasswords("") }}>
           <Trash2 className="mr-1 h-3 w-3" /> Xoa trang
         </Button>
-        <Button size="sm" onClick={handleStart} disabled={isRunning || selected.size === 0}>
-          <Play className="mr-1 h-3 w-3" /> Bat dau
-        </Button>
+        {isRunning ? (
+          <Button size="sm" variant="destructive" onClick={handleCancel}>
+            <Square className="mr-1 h-3 w-3" /> Huy
+          </Button>
+        ) : (
+          <Button size="sm" onClick={handleStart} disabled={selected.size === 0}>
+            <Play className="mr-1 h-3 w-3" /> Bat dau
+          </Button>
+        )}
       </div>
     </div>
   )
