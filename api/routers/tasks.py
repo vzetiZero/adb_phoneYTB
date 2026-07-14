@@ -322,6 +322,9 @@ async def google_logout(body: GoogleLogoutRequest):
                     failed = result.get("failed", [])
                     if removed:
                         log(f"[LOGOUT] {serial}: Removed {len(removed)} accounts: {', '.join(removed)}")
+                        # Clear email/password from device in DB
+                        db.update_device_account(serial, None, None)
+                        log(f"[LOGOUT] {serial}: Cleared account from Devices tab")
                     if failed:
                         log(f"[LOGOUT] {serial}: Failed {len(failed)} accounts")
                     if not removed and not failed:
