@@ -1,10 +1,31 @@
-import { useState, useRef } from "react"
+import { useState, useRef, useEffect } from "react"
 import { Button } from "@/components/ui/button"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
-import { Badge } from "@/components/ui/badge"
 import { apiFetch } from "@/lib/api"
 import { Play, Upload, Trash2, Cpu, Square } from "lucide-react"
+
+const STORAGE_KEY = "boxphone_login_config"
+
+interface SavedConfig {
+  emails: string
+  passwords: string
+  workers: number
+}
+
+function loadSaved(): SavedConfig {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY)
+    if (raw) return JSON.parse(raw)
+  } catch {}
+  return { emails: "", passwords: "", workers: 4 }
+}
+
+function saveToStorage(data: SavedConfig) {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(data))
+  } catch {}
+}
 
 interface TaskLoginProps {
   devices: { ip: string; name?: string; email?: string; password?: string }[]
@@ -16,10 +37,16 @@ interface TaskLoginProps {
 }
 
 export function TaskLogin({ devices, selected, isRunning, onLog, onStatusChange, onStepChange }: TaskLoginProps) {
-  const [emails, setEmails] = useState("")
-  const [passwords, setPasswords] = useState("")
-  const [workers, setWorkers] = useState(4)
+  const saved = loadSaved()
+  const [emails, setEmails] = useState(saved.emails)
+  const [passwords, setPasswords] = useState(saved.passwords)
+  const [workers, setWorkers] = useState(saved.workers)
   const fileInputRef = useRef<HTMLInputElement>(null)
+
+  // Auto-save to localStorage when values change
+  useEffect(() => {
+    saveToStorage({ emails, passwords, workers })
+  }, [emails, passwords, workers])
 
   const handleFileImport = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
@@ -81,6 +108,8 @@ export function TaskLogin({ devices, selected, isRunning, onLog, onStatusChange,
       }
     }
 
+    onLog(`[CONFIG] ${credentials.length} credentials, ${workers} workers, ${selected.size} devices`, "#6366f1")
+
     // Step 0: Pre-flight
     onStepChange?.(0)
     onLog("[PRE-FLIGHT] Dang ve Home + Reset...", "#f59e0b")
@@ -128,7 +157,7 @@ export function TaskLogin({ devices, selected, isRunning, onLog, onStatusChange,
       </div>
 
       <p className="text-xs text-slate-400">
-        Dang nhap Google tren thiet bi da chon bang cau hinh trong config.json.
+        Dang nhap Google tren thiet bi da chon. Du lieu duoc tu luu.
       </p>
 
       <div className="flex items-center gap-2">
@@ -172,7 +201,7 @@ export function TaskLogin({ devices, selected, isRunning, onLog, onStatusChange,
       </div>
 
       <div className="flex justify-end gap-2 pt-2">
-        <Button variant="outline" size="sm" onClick={() => { setEmails(""); setPasswords("") }}>
+        <Button variant="outline" size="sm" onClick={() => { setEmails(""); setPasswords(""); setWorkers(4) }}>
           <Trash2 className="mr-1 h-3 w-3" /> Xoa trang
         </Button>
         {isRunning ? (

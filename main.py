@@ -154,7 +154,16 @@ def run_google_login_per_device(
 ) -> dict[str, dict]:
     """Run Google login with per-device credentials in parallel."""
     results: dict[str, dict] = {}
-    max_workers = min(max(1, workers), len(credentials) or 1)
+    if not credentials:
+        if log_cb:
+            log_cb("[ERROR] No credentials to process")
+        return results
+
+    unique_devices = list(set(s for s, _, _ in credentials))
+    max_workers = min(max(1, workers), len(unique_devices))
+    if log_cb:
+        log_cb(f"[PARALLEL] {len(credentials)} credentials, {len(unique_devices)} unique devices, {max_workers} workers")
+
     with ThreadPoolExecutor(max_workers=max_workers) as ex:
         futs = {
             ex.submit(_login_single_device, adb, s, e, p, config, stop_event, log_cb): s
