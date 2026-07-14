@@ -8,11 +8,23 @@ Tài liệu này mô tả toàn bộ **logic nghiệp vụ**, **luồng triển 
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
-│  GUI (PySide6)              gui_app.py                        │
-│  ───────────                                                  │
-│  - Tab Run    : chọn thiết bị + form YouTube/Chrome + Start   │
-│  - Tab Devices: alias CRUD + import từ ADB                    │
-│  - Tab History: 200 dòng task_runs gần nhất                   │
+│  UI (Next.js)               ui/src/app/                      │
+│  ───────────                                                 │
+│  - /          : chọn thiết bị + Google Login + log realtime  │
+│  - /devices   : alias CRUD + import từ ADB                   │
+│  - /history   : 200 dòng task_runs gần nhất                  │
+│  Static export → ui/out/ → FastAPI serves                    │
+└──────────────────────────┬───────────────────────────────────┘
+                           │ REST API + WebSocket
+                           ▼
+┌──────────────────────────────────────────────────────────────┐
+│  FastAPI Backend           api/main.py                       │
+│  ────────────────                                            │
+│  - /api/devices/*  : CRUD devices                            │
+│  - /api/tasks/*    : start/cancel Google Login workflows     │
+│  - /api/history    : task run history                        │
+│  - /ws/logs        : real-time log streaming                 │
+│  - /{path}         : serve Next.js static files              │
 └──────────────────────────┬───────────────────────────────────┘
                            │ build Task[] → core.run_tasks()
                            ▼
@@ -100,7 +112,7 @@ app|keyword|loops[|key=value,key=value,...]
   - **Chrome**: `watch_min`, `watch_max` (giây lướt trang đích)
 
 Có 2 nguồn task:
-1. **GUI** (`gui_app.py`): build `list[Task]` từ form rồi đẩy thẳng vào `core.run_tasks()`.
+1. **Web UI** (`ui/src/app/page.tsx`): build credentials từ form rồi gọi `POST /api/tasks/google-login`.
 2. **CLI** (`main.py run --tasks tasks.txt`): đọc [tasks.txt](tasks.txt), parse bằng `parse_task_line()`.
 
 Pool comment: [comments.txt](comments.txt) — 1 câu/dòng, dùng cho `_post_comment()` của YouTube.
@@ -109,12 +121,12 @@ Pool comment: [comments.txt](comments.txt) — 1 câu/dòng, dùng cho `_post_co
 
 ## 4. Luồng triển khai chi tiết
 
-### 4.1. Khởi động & chọn thiết bị (GUI)
+### 4.1. Khởi động & chọn thiết bị
 
-1. `MainWindow.__init__()` → `db.init_db()` → build 3 tab.
-2. `_refresh_devices()` gọi `ADB.devices_all()` → liệt kê `serial state` từ lệnh `adb devices`.
-3. Tab Run: người dùng tick các thiết bị, đặt số workers (số device chạy song song), điền keyword + tham số.
-4. Bấm **▶ Start YouTube / Start Chrome / Start All** → `_build_*_tasks()` validate → `_launch(tasks, label)`.
+1. `app.py` → start FastAPI server → mở browser tại `http://127.0.0.1:8765`
+2. Next.js page `/` gọi `GET /api/devices` → liệt kê thiết bị từ ADB.
+3. Người dùng tick các thiết bị, đặt số workers, điền email/password (hoặc import từ file).
+4. Bấm **Start Google Login** → gọi `POST /api/tasks/google-login` → backend chạy workflow.
 
 ### 4.2. Orchestration song song
 
@@ -249,11 +261,14 @@ YouTube và Chrome khi gặp video 16:9 sẽ chủ động gọi `setRequestedOr
 ## 5. Vòng đời 1 phiên chạy (sequence)
 
 ```
-User bấm Start All
+User bấm Start Google Login
   │
   ▼
-gui_app._launch(tasks, "YT+Chrome")
-  │ spawn Thread runner
+Next.js → POST /api/tasks/google-login {credentials, workers}
+  │
+  ▼
+FastAPI tasks router → spawn Thread runner
+  │
   ▼
 core.run_tasks(adb, tasks, serials, workers=4)
   │ ThreadPoolExecutor x 4
@@ -278,7 +293,7 @@ core.run_tasks(adb, tasks, serials, workers=4)
 db.log_task_run(...)  ← persist
   │
   ▼
-GUI._finish_ui() → reload History tab
+WebSocket broadcast → UI auto-refreshes (polling /ws/logs)
 ```
 
 ---
@@ -324,7 +339,7 @@ Pipeline Chrome hiện đã hỗ trợ tham số `prefer_domain` để **ép cli
 **Vị trí code:**
 - [adb_time_sync/chrome_flow.py](adb_time_sync/chrome_flow.py): `_pick_serp_result(prefer_domain=...)`, `_open_chrome_url`, `_normalize_domain`, nhánh fallback trong `run_chrome_task`.
 - [adb_time_sync/task_runner.py](adb_time_sync/task_runner.py): truyền `task.opts["prefer_domain"]` vào `run_chrome_task`.
-- [gui_app.py](gui_app.py): tab Chrome chấp nhận cú pháp `keyword | domain` cho mỗi dòng từ khoá.
+- Web UI (`/` page): chấp nhận cú pháp `keyword | domain` cho mỗi dòng từ khoá.
 
 **Luồng thực thi khi `prefer_domain` được set:**
 
@@ -395,9 +410,16 @@ chrome|naver news|3|prefer_domain=news.naver.com,watch_min=90,watch_max=240
 
 | File | Vai trò |
 |------|---------|
+| [app.py](app.py) | Entry point — FastAPI server + mở browser |
+| [api/main.py](api/main.py) | FastAPI app — REST + WebSocket + serve Next.js static |
+| [api/routers/devices.py](api/routers/devices.py) | Device CRUD endpoints |
+| [api/routers/tasks.py](api/routers/tasks.py) | Task execution endpoints |
+| [api/routers/history.py](api/routers/history.py) | History query endpoint |
 | [main.py](main.py) | CLI entry + orchestrator `run_tasks` (song song theo device) |
-| [gui_app.py](gui_app.py) | PySide6 GUI — 3 tab Run / Devices / History |
 | [db.py](db.py) | SQLite layer (devices, task_runs, coords_cache) |
+| [ui/src/app/page.tsx](ui/src/app/page.tsx) | Next.js Run page — device select + Google Login + logs |
+| [ui/src/app/devices/page.tsx](ui/src/app/devices/page.tsx) | Next.js Devices page — CRUD + import |
+| [ui/src/app/history/page.tsx](ui/src/app/history/page.tsx) | Next.js History page |
 | [tasks.txt](tasks.txt) | Cấu hình task cho CLI |
 | [comments.txt](comments.txt) | Pool comment ngẫu nhiên cho YouTube |
 | [adb_time_sync/task_runner.py](adb_time_sync/task_runner.py) | Parse task + pipeline per-device + preflight |

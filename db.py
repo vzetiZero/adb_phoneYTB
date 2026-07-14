@@ -28,6 +28,8 @@ def init_db() -> None:
             CREATE TABLE IF NOT EXISTS devices (
                 ip TEXT PRIMARY KEY,
                 name TEXT,
+                email TEXT,
+                password TEXT,
                 width INTEGER,
                 height INTEGER,
                 last_seen TEXT
@@ -61,6 +63,12 @@ def init_db() -> None:
             )
             """
         )
+        # Migrate: add email/password columns if missing (for existing DB)
+        for col, typ in [("email", "TEXT"), ("password", "TEXT")]:
+            try:
+                conn.execute(f"ALTER TABLE devices ADD COLUMN {col} {typ}")
+            except Exception:
+                pass  # column already exists
         conn.commit()
 
 
@@ -96,6 +104,16 @@ def update_device_name(ip: str, name: Optional[str]) -> None:
             "INSERT INTO devices (ip, name) VALUES (?, ?) "
             "ON CONFLICT(ip) DO UPDATE SET name = excluded.name",
             (ip, name),
+        )
+        conn.commit()
+
+
+def update_device_account(ip: str, email: Optional[str], password: Optional[str]) -> None:
+    with _connect() as conn:
+        conn.execute(
+            "INSERT INTO devices (ip, email, password) VALUES (?, ?, ?) "
+            "ON CONFLICT(ip) DO UPDATE SET email = excluded.email, password = excluded.password",
+            (ip, email, password),
         )
         conn.commit()
 
@@ -164,4 +182,57 @@ def set_coord(width: int, height: int, role: str, x: int, y: int) -> None:
             "ON CONFLICT(width, height, role) DO UPDATE SET x = excluded.x, y = excluded.y",
             (width, height, role, x, y),
         )
+        conn.commit()
+
+
+# ---------------------------------------------------------------------------
+# Database management — reset / export / import
+# ---------------------------------------------------------------------------
+
+def reset_db() -> None:
+    """Delete all data from all tables."""
+    with _connect() as conn:
+        conn.execute("DELETE FROM devices")
+        conn.execute("DELETE FROM task_runs")
+        conn.execute("DELETE FROM coords_cache")
+        conn.commit()
+
+
+def export_db() -> dict[str, Any]:
+    """Export all tables as a JSON-serialisable dict."""
+    with _connect() as conn:
+        devices = _rows(conn.execute("SELECT * FROM devices"))
+        task_runs = _rows(conn.execute("SELECT * FROM task_runs"))
+        coords = _rows(conn.execute("SELECT * FROM coords_cache"))
+    return {"devices": devices, "task_runs": task_runs, "coords_cache": coords}
+
+
+def import_db(data: dict[str, Any]) -> None:
+    """Clear all tables and restore from exported data."""
+    init_db()
+    with _connect() as conn:
+        conn.execute("DELETE FROM devices")
+        conn.execute("DELETE FROM task_runs")
+        conn.execute("DELETE FROM coords_cache")
+
+        for d in data.get("devices", []):
+            conn.execute(
+                "INSERT OR REPLACE INTO devices (ip, name, email, password, width, height, last_seen) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (d.get("ip"), d.get("name"), d.get("email"), d.get("password"),
+                 d.get("width"), d.get("height"), d.get("last_seen")),
+            )
+        for t in data.get("task_runs", []):
+            conn.execute(
+                "INSERT OR REPLACE INTO task_runs (id, ts, serial, app, keyword, requested_loops, done_loops, status, note) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (t.get("id"), t.get("ts"), t.get("serial"), t.get("app"),
+                 t.get("keyword"), t.get("requested_loops"), t.get("done_loops"),
+                 t.get("status"), t.get("note")),
+            )
+        for c in data.get("coords_cache", []):
+            conn.execute(
+                "INSERT OR REPLACE INTO coords_cache (width, height, role, x, y) VALUES (?, ?, ?, ?, ?)",
+                (c.get("width"), c.get("height"), c.get("role"), c.get("x"), c.get("y")),
+            )
         conn.commit()

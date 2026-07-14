@@ -1,0 +1,90 @@
+import { Button } from "@/components/ui/button"
+import { apiFetch } from "@/lib/api"
+import { Play, LogOut, AlertTriangle } from "lucide-react"
+
+interface TaskLogoutProps {
+  devices: { ip: string; name?: string; email?: string; password?: string }[]
+  selected: Set<string>
+  isRunning: boolean
+  onLog: (msg: string, color?: string) => void
+  onStatusChange: (running: boolean) => void
+  onStepChange?: (step: number) => void
+}
+
+export function TaskLogout({ devices, selected, isRunning, onLog, onStatusChange, onStepChange }: TaskLogoutProps) {
+  const handleStart = async () => {
+    if (selected.size === 0) {
+      onLog("[LOI] Chua chon thiet bi", "#ef4444")
+      return
+    }
+
+    // Step 0: Pre-flight
+    onStepChange?.(0)
+    onLog("[PRE-FLIGHT] Dang ve Home + Reset...", "#f59e0b")
+    try {
+      await apiFetch("/api/tasks/home", {
+        method: "POST",
+        body: JSON.stringify(Array.from(selected)),
+      })
+      await new Promise((r) => setTimeout(r, 2000))
+      onLog("[PRE-FLIGHT] Home done", "#10b981")
+    } catch (e: any) {
+      onLog(`[PRE-FLIGHT] Loi: ${e.message}`, "#ef4444")
+    }
+
+    // Start logout all accounts
+    onStepChange?.(1)
+    try {
+      await apiFetch("/api/tasks/google-logout", {
+        method: "POST",
+        body: JSON.stringify({ serials: Array.from(selected) }),
+      })
+      onStatusChange(true)
+      onLog("[START] Google Logout - Xoa TAT CA tai khoan Google", "#3b82f6")
+    } catch (e: any) {
+      onLog(`[LOI] ${e.message}`, "#ef4444")
+    }
+  }
+
+  return (
+    <div className="space-y-4 animate-fade-in">
+      <div className="flex items-center gap-2 mb-3">
+        <LogOut className="w-4 h-4 text-orange-500" />
+        <h3 className="text-sm font-semibold text-slate-700">Google Logout - Tat ca tai khoan</h3>
+      </div>
+
+      <p className="text-xs text-slate-400">
+        Xoa TAT CA cac tai khoan Google dang co tren thiet bi Samsung (tieng Han).
+      </p>
+
+      <div className="bg-orange-50 border border-orange-200 rounded-lg p-3 flex items-start gap-2">
+        <AlertTriangle className="w-4 h-4 text-orange-500 mt-0.5 flex-shrink-0" />
+        <div className="text-xs text-orange-700">
+          <p className="font-semibold mb-1">Canh bao:</p>
+          <p>Thao tac nay se xoa tat ca tai khoan Google tren thiet bi. Ban can phai dang nhap lai sau do.</p>
+        </div>
+      </div>
+
+      <div className="bg-slate-50 rounded-lg p-3 text-xs text-slate-500 space-y-1">
+        <p className="font-medium">Quy trinh thuc hien:</p>
+        <ul className="list-disc list-inside ml-2 space-y-0.5">
+          <li>Quet tat ca tai khoan Google tren thiet bi</li>
+          <li>Mo Cai dat {'>'} Accounts</li>
+          <li>Xoa tung tai khoan mot</li>
+          <li>Xac nhan da xoa thanh cong</li>
+        </ul>
+      </div>
+
+      <div className="flex justify-end pt-2">
+        <Button
+          size="sm"
+          onClick={handleStart}
+          disabled={isRunning || selected.size === 0}
+          className="bg-orange-500 hover:bg-orange-600"
+        >
+          <Play className="mr-1 h-3 w-3" /> Xoa tat ca tai khoan
+        </Button>
+      </div>
+    </div>
+  )
+}

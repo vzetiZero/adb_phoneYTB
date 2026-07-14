@@ -16,6 +16,7 @@ debug_dumps/
 .vscode/
 .idea/
 .claude/
+.mimocode/
 *.swp
 Thumbs.db
 .DS_Store
@@ -29,3 +30,14 @@ like_templates/*.png
 venv/
 env/
 *.egg-info/
+
+# --- Sensitive / machine-specific ---
+account.txt
+config.json
+screenshots/
+*.txt.txt
+5.0.0
+a.txt
+
+# --- Node ---
+ui/node_modules/
