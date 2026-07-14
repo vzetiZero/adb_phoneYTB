@@ -59,8 +59,9 @@ async def task_status():
 
 @router.post("/google-login")
 async def start_google_login(body: GoogleLoginRequest):
+    # Auto-cancel old workflow if running
     if app_state.is_running:
-        raise HTTPException(409, "A workflow is already running. Cancel it first.")
+        app_state.reset()
 
     import main as core
 
@@ -230,8 +231,9 @@ async def go_home(body: HomeRequest):
 @router.post("/google-logout")
 async def google_logout(body: GoogleLogoutRequest):
     """Remove ALL Google accounts from selected Samsung devices."""
+    # Auto-cancel old workflow if running
     if app_state.is_running:
-        raise HTTPException(409, "A workflow is already running. Cancel it first.")
+        app_state.reset()
 
     from adb_time_sync.google_login import GoogleLoginAutomation
 

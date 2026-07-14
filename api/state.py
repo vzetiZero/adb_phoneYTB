@@ -72,6 +72,15 @@ class AppState:
 
     def cancel(self):
         self.stop_event.set()
+        self.is_running = False
+
+    def reset(self):
+        """Force cancel + wait for old thread to finish."""
+        self.stop_event.set()
+        self.is_running = False
+        if self.worker_thread and self.worker_thread.is_alive():
+            self.worker_thread.join(timeout=3)
+        self.stop_event.clear()
 
 
 app_state = AppState()

@@ -43,12 +43,13 @@ export function TaskHome({ selected, isRunning, onLog, onStatusChange, onStepCha
   }
 
   const handleCancel = async () => {
+    onStatusChange(false)
+    onLog("[HUY] Dang huy workflow...", "#f59e0b")
     try {
       await apiFetch("/api/tasks/cancel", { method: "POST" })
-      onLog("[HUY] Da huy workflow", "#f59e0b")
-      onStatusChange(false)
+      onLog("[HUY] Da huy thanh cong", "#10b981")
     } catch (e: any) {
-      onLog(`[LOI] Khong the huy: ${e?.message || String(e)}`, "#ef4444")
+      onLog(`[HUY] Cancel request sent (may still be stopping)`, "#f59e0b")
     }
   }
 
