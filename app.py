@@ -9,6 +9,15 @@ import sys
 import threading
 import time
 
+# Python 3.14 has circular import issues with asyncio/typing that break uvicorn.
+# Require Python 3.9 - 3.13 for stable operation.
+if sys.version_info >= (3, 14):
+    print(f"[ERROR] Python {sys.version_info.major}.{sys.version_info.minor} is not supported.")
+    print("[ERROR] Please use Python 3.12 or 3.13 instead.")
+    print("[ERROR] Download: https://www.python.org/downloads/")
+    input("Press Enter to exit...")
+    sys.exit(1)
+
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, PROJECT_ROOT)
 

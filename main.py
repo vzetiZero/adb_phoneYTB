@@ -10,6 +10,12 @@ headless / scripted use only.
 """
 from __future__ import annotations
 
+import sys
+if sys.version_info >= (3, 14):
+    print(f"[ERROR] Python {sys.version_info.major}.{sys.version_info.minor} is not supported.")
+    print("[ERROR] Please use Python 3.12 or 3.13 instead.")
+    sys.exit(1)
+
 # Initialize custom ADB server port from config.json before any other imports
 try:
     import json
