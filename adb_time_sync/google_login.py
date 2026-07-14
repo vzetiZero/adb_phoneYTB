@@ -257,16 +257,48 @@ class GoogleLoginAutomation:
             pass
         time.sleep(1)
 
+        # Step 1: Launch Play Store and wait for it to fully load
         try:
             self.device.app_start("com.android.vending")
-            time.sleep(3)
-            self.device.app_start("com.google.android.gms", ".auth.DefaultAuthDelegateService")
-            time.sleep(2)
-            # GMS auth may override rotation — re-apply portrait lock
-            self._force_portrait()
-            time.sleep(2)
+            self.logger.info("[PLAY] Play Store launched, waiting for load...")
+            time.sleep(5)
         except Exception as e:
             self.logger.debug(f"Play Store launch failed: {e}")
+
+        # Step 2: Try to launch GMS auth (may help trigger login screen)
+        try:
+            run_command(
+                [self._adb_path, "-s", self.serial, "shell", "am", "start-activity",
+                 "-n", "com.google.android.gms/.auth.DefaultAuthDelegateService"],
+                timeout=15,
+            )
+            self.logger.info("[PLAY] GMS auth service launched")
+            time.sleep(3)
+        except Exception as e:
+            self.logger.debug(f"GMS auth launch failed: {e}")
+
+        # Step 3: Fallback — if Play Store didn't load, try ADB intent
+        try:
+            check = run_command(
+                [self._adb_path, "-s", self.serial, "shell", "dumpsys", "activity", "activities"],
+                timeout=10,
+            )
+            stdout = check.stdout or ""
+            if "com.android.vending" not in stdout:
+                self.logger.info("[PLAY] Play Store not in foreground, retrying via ADB intent")
+                run_command(
+                    [self._adb_path, "-s", self.serial, "shell", "am", "start",
+                     "-a", "android.intent.action.VIEW",
+                     "-d", "market://details?id=com.android.vending"],
+                    timeout=15,
+                )
+                time.sleep(4)
+        except Exception:
+            pass
+
+        # Step 4: Re-apply portrait lock (GMS may override rotation)
+        self._force_portrait()
+        time.sleep(1)
 
     def connect(self, login_config: Optional[Dict] = None) -> bool:
         """Connect to device and prepare it for Google login automation."""
@@ -741,10 +773,36 @@ class GoogleLoginAutomation:
 
     def open_login_entry(self, login_config: Dict):
         sign_in_texts = self._collect_texts(login_config, "sign_in_texts", ["Sign in", "Log in", "SIGN IN"])
-        login_entry_texts = self._collect_texts(login_config, "login_entry_texts", ["Sign in", "Log in", "LOGIN", "로그인", "Login"])
+        # Extended list: Korean + English variants for Play Store login button
+        login_entry_texts = self._collect_texts(
+            login_config, "login_entry_texts",
+            [
+                "Sign in", "Log in", "LOGIN", "Login", "SIGN IN",
+                "로그인", "Google에 로그인", "계정 추가", "추가",
+                "Sign in to Google", "Add account",
+            ],
+        )
         self.logger.info(f"Looking for login entry button: {', '.join(login_entry_texts)}")
 
-        for attempt in range(5):
+        for attempt in range(6):
+            # Dump UI to debug what's on screen
+            if self._use_fallback:
+                dump_path = self._dump_ui_xml()
+                if dump_path:
+                    try:
+                        import xml.etree.ElementTree as ET
+                        root = ET.parse(dump_path).getroot()
+                        all_texts = [n.attrib.get("text", "") for n in root.iter() if n.attrib.get("text")]
+                        self.logger.info(f"[UI DEBUG] Visible texts: {all_texts[:15]}")
+                    except Exception:
+                        pass
+                    finally:
+                        try:
+                            import os
+                            os.unlink(dump_path)
+                        except Exception:
+                            pass
+
             if self.click_first_text(login_entry_texts, timeout=3):
                 time.sleep(2)
                 return
@@ -759,7 +817,7 @@ class GoogleLoginAutomation:
                 self._swipe_up()
                 time.sleep(1)
 
-            if attempt < 4:
+            if attempt < 5:
                 self.logger.info(f"Login entry not found on attempt {attempt + 1}; retrying after a short pause")
                 time.sleep(2)
 
