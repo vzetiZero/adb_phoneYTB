@@ -1,10 +1,11 @@
-import { useState, useEffect } from "react"
+import { useState, useEffect, useCallback } from "react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { Toast } from "@/components/ui/toast"
 import { apiFetch } from "@/lib/api"
-import { Settings, Save, Check, FolderOpen } from "lucide-react"
+import { Settings, Save, FolderOpen } from "lucide-react"
 
 interface Config {
   adb_path?: string
@@ -21,7 +22,7 @@ export default function SettingsPage() {
   const [deviceProfile, setDeviceProfile] = useState("boxphone")
   const [maxParallel, setMaxParallel] = useState("3")
   const [saving, setSaving] = useState(false)
-  const [saved, setSaved] = useState(false)
+  const [toast, setToast] = useState<{ message: string; type: "success" | "error" } | null>(null)
 
   useEffect(() => {
     apiFetch<Config>("/api/config").then((cfg) => {
@@ -35,7 +36,6 @@ export default function SettingsPage() {
 
   const handleSave = async () => {
     setSaving(true)
-    setSaved(false)
     try {
       const payload: Record<string, unknown> = {
         adb_path: adbPath.trim() || "adb",
@@ -47,17 +47,23 @@ export default function SettingsPage() {
         method: "PUT",
         body: JSON.stringify(payload),
       })
-      setSaved(true)
-      setTimeout(() => setSaved(false), 2000)
+      setToast({ message: "Config da duoc luu thanh cong!", type: "success" })
     } catch (err) {
-      alert("Loi luu config: " + (err as Error).message)
+      setToast({ message: "Loi luu config: " + (err as Error).message, type: "error" })
     } finally {
       setSaving(false)
     }
   }
 
+  const dismissToast = useCallback(() => setToast(null), [])
+
   return (
     <div className="flex flex-col h-full p-6 animate-fade-in">
+      {/* Toast */}
+      {toast && (
+        <Toast message={toast.message} type={toast.type} onClose={dismissToast} />
+      )}
+
       {/* Header */}
       <div className="flex items-center gap-3 mb-6">
         <div className="flex items-center justify-center w-9 h-9 rounded-xl bg-slate-100">
@@ -136,23 +142,9 @@ export default function SettingsPage() {
             disabled={saving}
             className="bg-gradient-to-r from-indigo-500 to-purple-500 hover:from-indigo-600 hover:to-purple-600 text-white shadow-md"
           >
-            {saved ? (
-              <>
-                <Check className="mr-2 h-4 w-4" /> Da luu!
-              </>
-            ) : saving ? (
-              "Dang luu..."
-            ) : (
-              <>
-                <Save className="mr-2 h-4 w-4" /> Luu cau hinh
-              </>
-            )}
+            <Save className="mr-2 h-4 w-4" />
+            {saving ? "Dang luu..." : "Luu cau hinh"}
           </Button>
-          {saved && (
-            <span className="text-xs text-green-600 animate-fade-in">
-              Config da duoc luu vao config.json
-            </span>
-          )}
         </div>
 
         {/* Current config preview */}
